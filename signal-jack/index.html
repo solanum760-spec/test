@@ -1,0 +1,993 @@
+<title>Signal Jack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Monoton&family=Share+Tech+Mono&display=swap">
+<style>
+/* Layout: one full-screen canvas — two playfields facing a central "broadcast tower" column with a striped sun. Single deliberate dark CRT look. */
+:root {
+  --night: #0b0820;
+  --ink: #efe8ff;
+  --dim: #8c7fb8;
+  --p1: #38f2ff;
+  --p2: #ff3fa8;
+  --sun: #ffc35a;
+  --panel: rgba(14, 9, 38, 0.94);
+  --f-jp: "DotGothic16", "Hiragino Kaku Gothic ProN", "Meiryo", monospace;
+  --f-num: "Share Tech Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--night); color: var(--ink); overflow: hidden; font-family: var(--f-jp); }
+#cv { display: block; width: 100%; height: 100%; touch-action: none; }
+.crt {
+  position: fixed; inset: 0; pointer-events: none;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.22) 2px 3px),
+    radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
+}
+#panel {
+  position: fixed; top: max(12px, env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+  width: min(360px, calc(100vw - 32px)); max-height: calc(100% - 24px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--p1); padding: 12px 14px 14px;
+  font-family: var(--f-jp); font-size: 13px; box-shadow: 0 0 24px rgba(56, 242, 255, 0.25);
+}
+#panel h2 { margin: 0 0 4px; font-size: 15px; font-weight: normal; color: var(--p1); }
+#panel p { margin: 0 0 10px; color: var(--dim); font-size: 12px; line-height: 1.5; }
+#panel .rows { display: grid; grid-template-columns: 1fr 88px; gap: 6px 10px; align-items: center; }
+#panel label { min-width: 0; line-height: 1.3; }
+#panel input {
+  width: 100%; box-sizing: border-box; background: #05030f; color: var(--ink); border: 1px solid var(--dim);
+  font-family: var(--f-num); font-size: 14px; padding: 3px 6px; font-variant-numeric: tabular-nums;
+}
+#panel input:focus-visible, #panel button:focus-visible { outline: 2px solid var(--sun); outline-offset: 1px; }
+#panel .bar { display: flex; gap: 8px; margin-top: 12px; }
+#panel button {
+  flex: 1; background: transparent; color: var(--ink); border: 1px solid var(--p2); padding: 6px 8px;
+  font-family: var(--f-jp); font-size: 13px; cursor: pointer;
+}
+#panel button:hover { background: rgba(255, 63, 168, 0.15); }
+</style>
+
+<canvas id="cv" aria-label="Signal Jack ゲーム画面"></canvas>
+<div class="crt"></div>
+<div id="panel" hidden>
+  <h2>パラメータ調整</h2>
+  <p>値を変えるとすぐ反映されます（BPMだけ次の試合から）。F2 で閉じる。</p>
+  <div class="rows" id="rows"></div>
+  <div class="bar"><button id="pReset" type="button">初期値に戻す</button><button id="pClose" type="button">閉じる</button></div>
+</div>
+
+<script>
+'use strict';
+/* ================================================================
+   SIGNAL JACK — レトロフューチャー対戦音ゲー（試作）
+   核：PERFECTで「電圧」をため、相手に「干渉」を送る。
+       送られた干渉ノーツをPERFECTで叩くと跳ね返る。
+       優勢な側の楽器が曲の主旋律を取る。
+   ================================================================ */
+
+// ---- 調整用パラメータ（【名前】＝値）。F2 パネルから実行中に変更できる ----
+const DEFAULTS = {
+  bpm: 128,
+  scrollSec: 1.25,
+  perfectMs: 38, greatMs: 75, goodMs: 115,
+  voltPerfect: 5, voltGreat: 1.5, voltPerLevel: 25,
+  domPerfect: 0.35, domGreat: 0.12, domMiss: 1.0,
+  domJamMiss: 4, domReflect: 2.5, domKO: 100, ownerTh: 8,
+  jamNotesPerLevel: 2, jamTravelSec: 0.55, effectBeatsPerLevel: 4,
+  handicapJam: 0.6,
+  hitstopMs: 60, reflectStopMs: 140, shakeReflect: 12,
+};
+const LABELS = {
+  bpm: '【BPM】', scrollSec: '【ノーツが落ちてくる秒数】',
+  perfectMs: '【PERFECT判定幅 ms】', greatMs: '【GREAT判定幅 ms】', goodMs: '【GOOD判定幅 ms】',
+  voltPerfect: '【PERFECTでたまる電圧】', voltGreat: '【GREATでたまる電圧】', voltPerLevel: '【干渉1段に要る電圧】',
+  domPerfect: '【PERFECTで動く主旋律】', domGreat: '【GREATで動く主旋律】', domMiss: '【MISSで失う主旋律】',
+  domJamMiss: '【干渉を落とした時に失う主旋律】', domReflect: '【反射で動く主旋律】', domKO: '【ジャック成立の主旋律】',
+  ownerTh: '【主旋律が切り替わる差】',
+  jamNotesPerLevel: '【干渉1段のノーツ数】', jamTravelSec: '【干渉が届くまでの秒数】', effectBeatsPerLevel: '【妨害効果の拍数／段】',
+  handicapJam: '【難易度差1段の干渉倍率】',
+  hitstopMs: '【判定の止め ms】', reflectStopMs: '【反射の止め ms】', shakeReflect: '【反射の画面揺れ px】',
+};
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+const P = Object.assign({}, DEFAULTS, LS.get('sj.params', {}));
+
+const DIFFS = ['EASY', 'NORMAL', 'HARD'];
+const DEFAULT_KEYS = { 1: ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyV'], 2: ['KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'KeyN'] };
+let KEYS = LS.get('sj.keys', DEFAULT_KEYS);
+if (!KEYS || !KEYS[1] || !KEYS[2]) KEYS = JSON.parse(JSON.stringify(DEFAULT_KEYS));
+const cfg = { mode: LS.get('sj.mode', 'cpu'), d1: LS.get('sj.d1', 1), d2: LS.get('sj.d2', 1), offset: LS.get('sj.offset', 0) };
+const saveCfg = () => { LS.set('sj.mode', cfg.mode); LS.set('sj.d1', cfg.d1); LS.set('sj.d2', cfg.d2); LS.set('sj.offset', cfg.offset); };
+
+const C = {
+  night: '#0b0820', ink: '#efe8ff', dim: '#8c7fb8', p1: '#38f2ff', p2: '#ff3fa8',
+  sunA: '#ffd36a', sunB: '#ff3f8e', grid: '#7a3cff',
+  perfect: '#ffffff', great: '#ffe14d', good: '#a49ad0', miss: '#ff5a5a',
+};
+const F = {
+  jp: '"DotGothic16", "Hiragino Kaku Gothic ProN", "Meiryo", monospace',
+  num: '"Share Tech Mono", ui-monospace, monospace',
+  logo: '"Monoton", "Share Tech Mono", sans-serif',
+};
+const pc = id => (id === 1 ? C.p1 : C.p2);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const coarse = matchMedia('(pointer: coarse)').matches;
+
+// ---- 曲データ（Aマイナー Am-F-C-G、主旋律がそのまま譜面になる） ----
+const CHORDS = [
+  { root: 45, tones: [57, 60, 64] }, { root: 41, tones: [53, 57, 60] },
+  { root: 48, tones: [55, 60, 64] }, { root: 43, tones: [55, 59, 62] },
+];
+// [16分の位置, A4からの半音, 長さ(16分)]
+const PHRASE_A = [
+  [[0, 0, 3], [3, 3, 1], [4, 7, 2], [6, 12, 2], [8, 10, 2], [10, 7, 2], [12, 3, 2], [14, 7, 2]],
+  [[0, 8, 3], [3, 7, 1], [4, 5, 2], [6, 3, 2], [8, 5, 3], [11, 7, 1], [12, 8, 4]],
+  [[0, 7, 2], [2, 3, 2], [4, 7, 2], [6, 10, 2], [8, 12, 3], [11, 10, 1], [12, 7, 4]],
+  [[0, 10, 2], [2, 7, 2], [4, 5, 2], [6, 2, 2], [8, 7, 4], [12, 10, 2], [14, 14, 2]],
+];
+const PHRASE_B = [
+  [[0, 12, 1], [1, 10, 1], [2, 12, 1], [3, 15, 1], [4, 19, 2], [6, 17, 2], [8, 15, 1], [9, 14, 1], [10, 12, 2], [12, 15, 2], [14, 12, 2]],
+  [[0, 17, 2], [2, 15, 1], [3, 12, 1], [4, 15, 2], [6, 12, 2], [8, 8, 2], [10, 12, 2], [12, 15, 4]],
+  [[0, 19, 1], [1, 17, 1], [2, 15, 2], [4, 19, 2], [6, 22, 2], [8, 19, 2], [10, 15, 2], [12, 12, 2], [14, 15, 2]],
+  [[0, 14, 2], [2, 10, 2], [4, 7, 1], [5, 10, 1], [6, 14, 2], [8, 17, 3], [11, 14, 1], [12, 19, 4]],
+];
+const INTRO_BARS = 2, MAIN_BARS = 40, OUTRO_BARS = 2, TOTAL_BARS = INTRO_BARS + MAIN_BARS + OUTRO_BARS;
+function sectionOf(bar) {
+  if (bar < INTRO_BARS) return 'intro';
+  if (bar >= INTRO_BARS + MAIN_BARS) return 'outro';
+  return Math.floor((bar - INTRO_BARS) / 8) % 2 === 0 ? 'A' : 'B';
+}
+function melodyBar(bar) {
+  const s = sectionOf(bar);
+  if (s !== 'A' && s !== 'B') return null;
+  return (s === 'A' ? PHRASE_A : PHRASE_B)[(bar - INTRO_BARS) % 4];
+}
+
+// ---- 状態 ----
+let state = 'title'; // title | keycfg | play | pause | result
+let M = null;        // 試合
+const hintSeen = {};
+let hint = null;     // {text, t0(wall)}
+
+// ================================================================ AUDIO
+let ac = null, master, musicBus, sfxBus, delayIn, noiseBuf, schedTimer = null;
+function ensureAudio() {
+  if (ac) { if (ac.state === 'suspended' && state !== 'pause') ac.resume(); return; }
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.ratio.value = 4;
+  master = ac.createGain(); master.gain.value = 0.8;
+  master.connect(comp); comp.connect(ac.destination);
+  musicBus = ac.createGain(); musicBus.gain.value = 0.55; musicBus.connect(master);
+  sfxBus = ac.createGain(); sfxBus.gain.value = 0.75; sfxBus.connect(master);
+  delayIn = ac.createDelay(1); delayIn.delayTime.value = 0.75 * 60 / 128;
+  const fb = ac.createGain(); fb.gain.value = 0.32;
+  const wet = ac.createGain(); wet.gain.value = 0.3;
+  const dl = ac.createBiquadFilter(); dl.type = 'lowpass'; dl.frequency.value = 2400;
+  delayIn.connect(dl); dl.connect(fb); fb.connect(delayIn); dl.connect(wet); wet.connect(musicBus);
+  noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+}
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+function env(gn, t, a, peak, dur) {
+  gn.gain.setValueAtTime(0.0001, t);
+  gn.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + a);
+  gn.gain.exponentialRampToValueAtTime(0.0001, t + a + dur);
+}
+function outChain(node, pan, dest) {
+  if (pan != null && ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = pan; node.connect(p); p.connect(dest); }
+  else node.connect(dest);
+}
+function tone(type, f, t, dur, peak, dest, o = {}) {
+  const os = ac.createOscillator(); os.type = type; os.frequency.setValueAtTime(f, t);
+  if (o.fEnd) os.frequency.exponentialRampToValueAtTime(o.fEnd, t + (o.fTime || dur));
+  if (o.detune) os.detune.value = o.detune;
+  const gn = ac.createGain(); const a = o.a || 0.004; env(gn, t, a, peak, dur);
+  let n = os;
+  if (o.lp) { const fl = ac.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = o.lp; fl.Q.value = o.q || 0.7; n.connect(fl); n = fl; }
+  n.connect(gn); outChain(gn, o.pan, dest);
+  if (o.send) gn.connect(o.send);
+  os.start(t); os.stop(t + a + dur + 0.05);
+  return os;
+}
+function noise(t, dur, peak, dest, o = {}) {
+  const s = ac.createBufferSource(); s.buffer = noiseBuf;
+  const gn = ac.createGain(); env(gn, t, 0.002, peak, dur);
+  let n = s;
+  for (const [type, f] of [['highpass', o.hp], ['bandpass', o.bp], ['lowpass', o.lp]]) {
+    if (!f) continue; const b = ac.createBiquadFilter(); b.type = type; b.frequency.value = f; n.connect(b); n = b;
+  }
+  n.connect(gn); outChain(gn, o.pan, dest);
+  s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.05);
+}
+// --- 楽器 ---
+const kick = t => tone('sine', 150, t, 0.2, 0.9, musicBus, { fEnd: 42, fTime: 0.12 });
+const snare = t => { noise(t, 0.15, 0.4, musicBus, { bp: 1900 }); tone('triangle', 190, t, 0.08, 0.25, musicBus); };
+const hat = (t, open) => noise(t, open ? 0.12 : 0.035, open ? 0.12 : 0.15, musicBus, { hp: 7500 });
+const crash = t => noise(t, 1.3, 0.22, musicBus, { hp: 4200 });
+const bass = (m, t, d) => tone('sawtooth', mtof(m), t, d, 0.26, musicBus, { lp: 720, q: 5 });
+const pad = (tones, t, d) => tones.forEach(m => tone('triangle', mtof(m), t, d, 0.045, musicBus, { a: 0.25 }));
+function lead(owner, midi, t, dur) {
+  const f = mtof(midi);
+  if (owner === 1) { // P1：明るいノコギリ波2本
+    tone('sawtooth', f, t, dur, 0.13, musicBus, { a: 0.006, lp: 3400, q: 3, detune: -8, pan: -0.3, send: delayIn });
+    tone('sawtooth', f, t, dur, 0.1, musicBus, { a: 0.006, lp: 3400, detune: 8, pan: -0.3 });
+  } else if (owner === 2) { // P2：ビブラートの矩形波
+    const os = tone('square', f, t, dur, 0.11, musicBus, { a: 0.012, lp: 2600, q: 2, pan: 0.3, send: delayIn });
+    const l = ac.createOscillator(); l.frequency.value = 6.2;
+    const lg = ac.createGain(); lg.gain.value = f * 0.014;
+    l.connect(lg); lg.connect(os.frequency); l.start(t); l.stop(t + dur + 0.1);
+  } else { // 拮抗：細い三角波がうなる
+    tone('triangle', f, t, dur, 0.11, musicBus, { a: 0.01, detune: -14 });
+    tone('triangle', f, t, dur, 0.08, musicBus, { a: 0.01, detune: 14 });
+  }
+}
+// --- 効果音（優先度：反射 > 干渉着弾 > PERFECT > その他） ---
+const sNow = () => ac.currentTime;
+function sfxHit(gr, lane, pan) {
+  const t = sNow(), f = mtof(84 + [0, 3, 7, 10][lane]);
+  if (gr === 'P') { tone('square', f, t, 0.05, 0.12, sfxBus, { pan }); noise(t, 0.025, 0.14, sfxBus, { hp: 6000, pan }); }
+  else if (gr === 'G') tone('triangle', f, t, 0.06, 0.14, sfxBus, { pan });
+  else tone('sine', f / 2, t, 0.05, 0.12, sfxBus, { pan });
+}
+const sfxTap = pan => tone('sine', 1200, sNow(), 0.02, 0.04, sfxBus, { pan });
+const sfxMiss = pan => { const t = sNow(); tone('sine', 120, t, 0.14, 0.28, sfxBus, { fEnd: 55, pan }); };
+const sfxDischarge = pan => { const t = sNow(); tone('sawtooth', 700, t, 0.3, 0.12, sfxBus, { fEnd: 60, lp: 1800, pan }); noise(t, 0.22, 0.15, sfxBus, { bp: 3200, pan }); };
+const sfxSend = pan => tone('sawtooth', 220, sNow(), 0.3, 0.17, sfxBus, { fEnd: 1760, fTime: 0.25, lp: 4200, pan });
+const sfxArrive = pan => { const t = sNow(); tone('sawtooth', 900, t, 0.45, 0.2, sfxBus, { fEnd: 70, fTime: 0.4, lp: 2200, pan }); noise(t, 0.3, 0.16, sfxBus, { bp: 1200, pan }); };
+const sfxZap = pan => tone('square', 1500, sNow(), 0.08, 0.06, sfxBus, { fEnd: 400, pan });
+function sfxReflect(pan) {
+  const t = sNow();
+  noise(t, 0.07, 0.45, sfxBus, { hp: 2500, pan });
+  tone('square', 440, t, 0.12, 0.18, sfxBus, { fEnd: 1760, fTime: 0.08, pan });
+  tone('sine', 1760, t + 0.01, 0.5, 0.3, sfxBus, { pan });
+  tone('sine', 2637, t + 0.03, 0.4, 0.18, sfxBus, { pan });
+}
+const sfxDeny = pan => tone('square', 140, sNow(), 0.06, 0.07, sfxBus, { pan });
+function sfxEnd(win) {
+  const t = sNow();
+  const ch = win ? [69, 73, 76, 81] : [69, 72, 76, 79];
+  ch.forEach((m, i) => tone('sawtooth', mtof(m), t + i * 0.06, 0.9, 0.08, sfxBus, { lp: 3000 }));
+}
+
+// --- スケジューラ ---
+function startScheduler() {
+  clearInterval(schedTimer);
+  schedTimer = setInterval(schedule, 25);
+  schedule();
+}
+function schedule() {
+  if (!M || !ac) return;
+  const st = M.beat / 4;
+  while (true) {
+    if (M.musicStopped || M.nextStep >= TOTAL_BARS * 16) { clearInterval(schedTimer); return; }
+    const t = M.startAt + M.nextStep * st;
+    if (t > ac.currentTime + 0.12) break;
+    playStep(M.nextStep, t);
+    M.nextStep++;
+  }
+}
+function owner() { return M.dom > P.ownerTh ? 1 : M.dom < -P.ownerTh ? 2 : 0; }
+function playStep(n, t) {
+  const bar = Math.floor(n / 16), s = n % 16, sec = sectionOf(bar), st = M.beat / 4, ch = CHORDS[bar % 4];
+  if (sec === 'intro') {
+    if (s % 4 === 0) {
+      kick(t);
+      if (bar === INTRO_BARS - 1) tone('square', s === 12 ? 1760 : 1320, t, 0.05, 0.1, musicBus);
+    }
+    if (s % 2 === 0) hat(t, false);
+    return;
+  }
+  if (sec === 'outro') {
+    if (bar === INTRO_BARS + MAIN_BARS && s === 0) { kick(t); crash(t); pad(CHORDS[0].tones, t, st * 28); bass(33, t, st * 14); }
+    return;
+  }
+  if (s % 4 === 0) kick(t);
+  if (s === 4 || s === 12) snare(t);
+  if (s % 4 === 2) hat(t, true);
+  else if (sec === 'B' || s % 2 === 0) hat(t, false);
+  if (s === 0) { pad(ch.tones, t, st * 15); if ((bar - INTRO_BARS) % 8 === 0) crash(t); }
+  if (s % 2 === 0) bass(ch.root + (s % 4 === 2 ? 12 : 0), t, st * 1.7);
+  const ow = owner();
+  for (const [ms, semi, len] of melodyBar(bar)) if (ms === s) lead(ow, 69 + semi, t, len * st * 0.95);
+}
+
+// ================================================================ GAME
+function buildChart(diff, beat) {
+  const st = beat / 4, notes = [];
+  let prevLane = -1, prevT = -9;
+  for (let bar = INTRO_BARS; bar < INTRO_BARS + MAIN_BARS; bar++) {
+    for (const [s, semi] of melodyBar(bar)) {
+      if (diff === 0 && s % 4 !== 0) continue;
+      if (diff === 1 && s % 2 !== 0) continue;
+      const t = (bar * 16 + s) * st;
+      let lane = Math.min(3, Math.floor((((semi % 12) + 12) % 12) / 3));
+      if (lane === prevLane && t - prevT < st * 1.5) lane = (lane + 1) % 4;
+      notes.push({ t, lane, jam: false, judged: false });
+      prevLane = lane; prevT = t;
+    }
+  }
+  return notes;
+}
+const pickTh = () => [25, 25, 50, 50, 50, 75, 100][(Math.random() * 7) | 0];
+function makePlayer(id, diff, cpu, beat) {
+  return {
+    id, diff, cpu, notes: buildChart(diff, beat), scale: 1, volt: 0, combo: 0, maxCombo: 0,
+    stats: { P: 0, G: 0, D: 0, M: 0, sends: 0, reflects: 0, maxLv: 0 },
+    fx: { noise: -9, wobble: -9, ghost: -9 }, ghosts: [], lastGhost: -9,
+    keyFlash: [-9, -9, -9, -9], popJ: null, popE: null, cpuTh: pickTh(),
+  };
+}
+const other = pl => (pl.id === 1 ? M.pl[1] : M.pl[0]);
+const panOf = pl => (pl.id === 1 ? -0.45 : 0.45);
+
+function startMatch() {
+  ensureAudio();
+  const t0 = ac.currentTime;
+  master.gain.cancelScheduledValues(t0); master.gain.setValueAtTime(0.8, t0);
+  const beat = 60 / P.bpm;
+  const p1 = makePlayer(1, cfg.d1, false, beat);
+  const p2 = makePlayer(2, cfg.d2, cfg.mode === 'cpu', beat);
+  const hardN = buildChart(2, beat).length;
+  p1.scale = hardN / p1.notes.length; p2.scale = hardN / p2.notes.length;
+  M = {
+    beat, pl: [p1, p2], dom: 0, packets: [], particles: [], shake: 0, shakeT: -9, flashT: -9,
+    startAt: t0 + 0.15, nextStep: 0, musicStopped: false,
+    songEnd: TOTAL_BARS * 4 * beat, notesEnd: (INTRO_BARS + MAIN_BARS) * 4 * beat,
+    result: null,
+  };
+  state = 'play';
+  startScheduler();
+  showHint(`ノーツが光る線に重なったら叩く　P1: ${laneKeysText(1)}${cfg.mode === '2p' ? `　P2: ${laneKeysText(2)}` : ''}`, 'start');
+}
+function songNow() {
+  if (!M || !ac) return 0;
+  const lat = ac.outputLatency || ac.baseLatency || 0;
+  return ac.currentTime - M.startAt - lat - cfg.offset / 1000;
+}
+function shiftDom(pl, amt) {
+  M.dom += pl.id === 1 ? amt : -amt;
+  M.dom = Math.max(-P.domKO, Math.min(P.domKO, M.dom));
+}
+function popup(pl, slot, text, color, now, hold, size = 1, sub = '') {
+  pl[slot] = { text, color, t: now, hold, size, sub };
+}
+function burst(pl, lane, color, count, now, hold, power = 1) {
+  const x = laneCenter(pl, lane), y = L.yJ;
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI - Math.PI, sp = (80 + Math.random() * 260) * power;
+    M.particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t0: now + hold, life: 0.25 + Math.random() * 0.25, color, s: 2 + Math.random() * 3 });
+  }
+  if (M.particles.length > 500) M.particles.splice(0, M.particles.length - 500);
+}
+function applyGrade(pl, n, gr, now, delta = 0) {
+  n.judged = true; n.grade = gr;
+  const opp = other(pl), pan = panOf(pl);
+  if (gr === 'M') {
+    pl.stats.M++; pl.combo = 0;
+    if (pl.volt >= P.voltPerLevel * 0.5) { popup(pl, 'popE', '放電', C.miss, now, 0.05, 0.9); sfxDischarge(pan); }
+    pl.volt = 0;
+    shiftDom(pl, -(n.jam ? P.domJamMiss : P.domMiss * pl.scale));
+    popup(pl, 'popJ', 'MISS', C.miss, now, 0);
+    sfxMiss(pan);
+    return;
+  }
+  pl.combo++; pl.maxCombo = Math.max(pl.maxCombo, pl.combo); pl.stats[gr]++;
+  const sub = gr === 'P' ? '' : delta < 0 ? 'FAST' : 'SLOW';
+  if (n.jam) {
+    if (gr === 'P') {
+      const hold = P.reflectStopMs / 1000;
+      pl.stats.reflects++;
+      shiftDom(pl, P.domReflect);
+      launch(pl, opp, 0, 1, now);
+      popup(pl, 'popJ', 'REFLECT!', pc(pl.id), now, hold, 1.25);
+      burst(pl, n.lane, pc(pl.id), 26, now, hold, 1.4);
+      burst(pl, n.lane, '#ffffff', 10, now, hold, 0.8);
+      M.shake = P.shakeReflect * (reduceMotion ? 0.3 : 1); M.shakeT = now; M.flashT = now;
+      sfxReflect(pan);
+    } else {
+      popup(pl, 'popJ', 'BLOCK', C.good, now, 0.03, 1, sub);
+      burst(pl, n.lane, pc(n.from), 6, now, 0.03);
+      sfxHit('D', n.lane, pan);
+    }
+    return;
+  }
+  const s = pl.scale;
+  if (gr === 'P') { pl.volt += P.voltPerfect * s; shiftDom(pl, P.domPerfect * s); }
+  else if (gr === 'G') { pl.volt += P.voltGreat * s; shiftDom(pl, P.domGreat * s); }
+  pl.volt = Math.min(P.voltPerLevel * 4, pl.volt);
+  const hold = gr === 'P' ? P.hitstopMs / 1000 : gr === 'G' ? P.hitstopMs / 2000 : 0;
+  const col = gr === 'P' ? C.perfect : gr === 'G' ? C.great : C.good;
+  popup(pl, 'popJ', gr === 'P' ? 'PERFECT' : gr === 'G' ? 'GREAT' : 'GOOD', col, now, hold, 1, sub);
+  burst(pl, n.lane, gr === 'P' ? pc(pl.id) : col, gr === 'P' ? 12 : 6, now, hold);
+  sfxHit(gr, n.lane, pan);
+  if (!pl.cpu && pl.volt >= P.voltPerLevel) showHint(`${keyName(KEYS[pl.id][4])}${pl.id === 1 && cfg.mode === 'cpu' ? '（またはSPACE）' : ''} で干渉を送信！ ためるほど強いが、ミスすると電圧は全部消える`, 'volt' + pl.id);
+}
+function hit(pl, lane, now) {
+  pl.keyFlash[lane] = now;
+  const win = P.goodMs / 1000;
+  let best = null, bd = 1e9;
+  for (const n of pl.notes) {
+    if (n.t - now > win) break;
+    if (n.judged || n.lane !== lane) continue;
+    const d = Math.abs(n.t - now);
+    if (d <= win && d < bd) { bd = d; best = n; }
+  }
+  if (!best) { sfxTap(panOf(pl)); return; }
+  const ad = bd * 1000;
+  applyGrade(pl, best, ad <= P.perfectMs ? 'P' : ad <= P.greatMs ? 'G' : 'D', now, now - best.t);
+}
+function launch(from, to, level, count, now) {
+  M.packets.push({ from, to, level, count, t0: now, t1: now + P.jamTravelSec, done: false });
+}
+function send(pl, now) {
+  if (state !== 'play') return;
+  if (pl.volt < P.voltPerLevel) { sfxDeny(panOf(pl)); popup(pl, 'popE', '電圧不足', C.dim, now, 0, 0.8); return; }
+  const lv = Math.min(4, Math.floor(pl.volt / P.voltPerLevel)), opp = other(pl);
+  let cnt = lv * P.jamNotesPerLevel;
+  const dd = pl.diff - opp.diff;
+  if (dd > 0) cnt = Math.max(1, Math.round(cnt * Math.pow(P.handicapJam, dd)));
+  pl.volt = 0; pl.stats.sends++; pl.stats.maxLv = Math.max(pl.stats.maxLv, lv);
+  launch(pl, opp, lv, cnt, now);
+  popup(pl, 'popE', `送信 LV${lv}`, pc(pl.id), now, 0.05, 0.95);
+  sfxSend(panOf(pl));
+}
+function arrive(pk, now) {
+  const to = pk.to;
+  inject(to, pk.count, pk.from.id, now);
+  if (pk.level > 0) {
+    const dur = P.effectBeatsPerLevel * pk.level * M.beat;
+    if (pk.level >= 2) to.fx.noise = now + dur;
+    if (pk.level >= 3) to.fx.wobble = now + dur;
+    if (pk.level >= 4) to.fx.ghost = now + dur;
+    popup(to, 'popE', `干渉 LV${pk.level}`, pc(pk.from.id), now, 0.06, 1.05);
+    sfxArrive(panOf(to));
+    if (!to.cpu) showHint('干渉が来た！ 縞模様のノーツを PERFECT で叩くと相手に跳ね返る', 'jam' + to.id);
+  } else sfxZap(panOf(to));
+}
+function inject(to, count, fromId, now) {
+  const grid = M.beat / 2;
+  let t = Math.ceil((now + P.scrollSec + 0.02) / grid) * grid, placed = 0, guard = 0;
+  while (placed < count && guard++ < 64) {
+    if (t > M.notesEnd) break;
+    const lanes = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+    for (const ln of lanes) {
+      if (!to.notes.some(n => n.lane === ln && Math.abs(n.t - t) < 0.11)) {
+        to.notes.push({ t, lane: ln, jam: true, from: fromId, judged: false });
+        placed++; break;
+      }
+    }
+    t += grid * (Math.random() < 0.6 ? 1 : 2);
+  }
+  to.notes.sort((a, b) => a.t - b.t);
+}
+// --- CPU ---
+const CPU_TABLE = [[0.45, 0.3, 0.15], [0.6, 0.25, 0.1], [0.72, 0.2, 0.05]];
+function cpuPlan(pl, n, now) {
+  let [pp, pg, pd] = CPU_TABLE[pl.diff];
+  if (pl.fx.noise > now || pl.fx.wobble > now) { pg += pp * 0.2; pp *= 0.8; }
+  if (n.jam) { pp *= 0.6; pg *= 0.9; }
+  const r = Math.random();
+  const g = r < pp ? 'P' : r < pp + pg ? 'G' : r < pp + pg + pd ? 'D' : 'M';
+  const sgn = Math.random() < 0.5 ? -1 : 1, rr = Math.random();
+  const ms = g === 'P' ? (rr * 1.6 - 0.8) * P.perfectMs
+    : g === 'G' ? sgn * (P.perfectMs + rr * (P.greatMs - P.perfectMs))
+    : g === 'D' ? sgn * (P.greatMs + rr * (P.goodMs - P.greatMs)) : 0;
+  return { g, at: n.t + ms / 1000 };
+}
+function cpuThink(pl, now) {
+  for (const n of pl.notes) {
+    if (n.t - now > 0.35) break;
+    if (n.judged) continue;
+    if (!n.plan) n.plan = cpuPlan(pl, n, now);
+    if (n.plan.g !== 'M' && now >= n.plan.at) { pl.keyFlash[n.lane] = now; applyGrade(pl, n, n.plan.g, now, n.plan.at - n.t); }
+  }
+  if (pl.volt >= pl.cpuTh) { send(pl, now); pl.cpuTh = pickTh(); }
+}
+function update(now) {
+  for (const pl of M.pl) {
+    if (pl.cpu) cpuThink(pl, now);
+    const win = P.goodMs / 1000;
+    for (const n of pl.notes) {
+      if (n.t - now > 0.3) break;
+      if (!n.judged && now - n.t > win) applyGrade(pl, n, 'M', now);
+    }
+    if (pl.fx.ghost > now && now - pl.lastGhost > 0.22) {
+      pl.lastGhost = now;
+      pl.ghosts.push({ t: now + P.scrollSec * (0.85 + Math.random() * 0.15), lane: (Math.random() * 4) | 0, from: other(pl).id });
+    }
+    pl.ghosts = pl.ghosts.filter(gn => (gn.t - now) / P.scrollSec > 0.28);
+  }
+  for (const pk of M.packets) if (!pk.done && now >= pk.t1) { pk.done = true; arrive(pk, now); }
+  M.packets = M.packets.filter(p => !p.done);
+  if (Math.abs(M.dom) >= P.domKO) endMatch('ko', now);
+  else if (now >= M.songEnd) endMatch('time', now);
+}
+function endMatch(reason, now) {
+  if (state !== 'play') return;
+  state = 'result';
+  const winner = M.dom > 1 ? 1 : M.dom < -1 ? 2 : 0;
+  M.result = { reason, winner, at: performance.now() / 1000 };
+  if (reason === 'ko') {
+    M.musicStopped = true; clearInterval(schedTimer);
+    const t = ac.currentTime; master.gain.setValueAtTime(0.8, t); master.gain.linearRampToValueAtTime(0.0001, t + 0.5);
+    setTimeout(() => { if (state === 'result') { const t2 = ac.currentTime; master.gain.cancelScheduledValues(t2); master.gain.setValueAtTime(0.8, t2); sfxEnd(winner !== 0); } }, 650);
+  } else sfxEnd(winner !== 0);
+}
+function praise(pl) {
+  const s = pl.stats, total = s.P + s.G + s.D + s.M || 1;
+  if (s.reflects >= 3) return '反射の達人';
+  if (s.maxLv >= 4) return 'フルパワー送信';
+  if (s.P / total >= 0.8) return '精密チューナー';
+  if (pl.maxCombo >= 40) return '安定の受信機';
+  if (s.sends >= 6) return '電波の嵐';
+  return 'ナイスファイト';
+}
+function showHint(text, key) {
+  if (hintSeen[key]) return;
+  hintSeen[key] = true;
+  hint = { text, t0: performance.now() / 1000 };
+}
+
+// ================================================================ INPUT
+function keyName(code) {
+  if (!code) return '?';
+  return code.replace(/^Key/, '').replace(/^Digit/, '').replace('Semicolon', ';').replace('Slash', '/').replace('Comma', ',')
+    .replace('Period', '.').replace('Quote', "'").replace('BracketLeft', '[').replace('BracketRight', ']').replace('Backslash', '\\')
+    .replace('Space', 'SPACE').replace('ShiftLeft', 'L-SHIFT').replace('ShiftRight', 'R-SHIFT').replace(/^Arrow/, '').replace(/^Numpad/, 'NUM');
+}
+const laneKeysText = id => KEYS[id].slice(0, 4).map(keyName).join(' ');
+const GAME_KEYS = new Set(['Space', 'Enter', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Slash', 'Semicolon', 'Tab', 'F2', 'Quote']);
+let keycfgIdx = 0, keycfgDraft = null;
+const KEYCFG_STEPS = [[1, 0], [1, 1], [1, 2], [1, 3], [1, 4], [2, 0], [2, 1], [2, 2], [2, 3], [2, 4]];
+
+addEventListener('keydown', e => {
+  if (e.code === 'F2') { e.preventDefault(); togglePanel(); return; }
+  if (e.target && e.target.tagName === 'INPUT') return;
+  const used = GAME_KEYS.has(e.code) || [...KEYS[1], ...KEYS[2]].includes(e.code);
+  if (used) e.preventDefault();
+  if (e.repeat) return;
+  const code = e.code;
+  if (state === 'title') {
+    if (code === 'Enter' || code === 'Space') startMatch();
+    else if (code === 'KeyM') { cfg.mode = cfg.mode === 'cpu' ? '2p' : 'cpu'; saveCfg(); }
+    else if (code === 'KeyZ') { cfg.d1 = (cfg.d1 + 1) % 3; saveCfg(); }
+    else if (code === 'Slash') { cfg.d2 = (cfg.d2 + 1) % 3; saveCfg(); }
+    else if (code === 'ArrowLeft') { cfg.offset -= 5; saveCfg(); }
+    else if (code === 'ArrowRight') { cfg.offset += 5; saveCfg(); }
+    else if (code === 'KeyK') { state = 'keycfg'; keycfgIdx = 0; keycfgDraft = JSON.parse(JSON.stringify(KEYS)); }
+    return;
+  }
+  if (state === 'keycfg') {
+    if (code === 'Escape') { state = 'title'; return; }
+    const [id, i] = KEYCFG_STEPS[keycfgIdx];
+    keycfgDraft[id][i] = code;
+    keycfgIdx++;
+    if (keycfgIdx >= KEYCFG_STEPS.length) { KEYS = keycfgDraft; LS.set('sj.keys', KEYS); state = 'title'; }
+    return;
+  }
+  if (state === 'play') {
+    const now = songNow();
+    if (code === 'Escape') { pause(); return; }
+    for (const pl of M.pl) {
+      if (pl.cpu) continue;
+      const k = KEYS[pl.id], li = k.indexOf(code);
+      if (li >= 0 && li < 4) hit(pl, li, now);
+      else if (li === 4 || (pl.id === 1 && cfg.mode === 'cpu' && code === 'Space')) send(pl, now);
+    }
+    return;
+  }
+  if (state === 'pause') {
+    if (code === 'Escape' || code === 'Enter' || code === 'Space') resume();
+    else if (code === 'KeyQ') { toTitle(); }
+    return;
+  }
+  if (state === 'result') {
+    if (performance.now() / 1000 - M.result.at < 0.6) return;
+    if (code === 'Enter' || code === 'Space') startMatch();
+    else if (code === 'Escape') toTitle();
+  }
+});
+function pause() { if (state !== 'play') return; state = 'pause'; ac.suspend(); }
+function resume() { if (state !== 'pause') return; state = 'play'; ac.resume(); }
+function toTitle() {
+  if (M) { M.musicStopped = true; clearInterval(schedTimer); }
+  if (ac) { ac.resume(); const t = ac.currentTime; master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(0.0001, t); }
+  state = 'title';
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+
+const cv = document.getElementById('cv');
+cv.addEventListener('pointerdown', e => {
+  const x = e.clientX, y = e.clientY;
+  if (state === 'title') { startMatch(); return; }
+  if (state === 'pause') { resume(); return; }
+  if (state === 'result') { if (performance.now() / 1000 - M.result.at > 0.6) startMatch(); return; }
+  if (state !== 'play') return;
+  const now = songNow(), pl = M.pl[0], fl = fieldLanes(pl);
+  if (x >= fl.x && x <= fl.x + fl.w && y > L.y0) hit(pl, Math.min(3, Math.floor((x - fl.x) / fl.lw)), now);
+  else if (Math.abs(x - L.cx) < L.cw / 2) send(pl, now);
+  else if (cfg.mode === '2p') {
+    const p2 = M.pl[1], f2 = fieldLanes(p2);
+    if (x >= f2.x && x <= f2.x + f2.w && y > L.y0) hit(p2, Math.min(3, Math.floor((x - f2.x) / f2.lw)), now);
+  }
+});
+
+// ================================================================ PARAM PANEL
+const panel = document.getElementById('panel'), rows = document.getElementById('rows');
+function buildPanel() {
+  rows.innerHTML = '';
+  for (const k of Object.keys(DEFAULTS)) {
+    const id = 'p_' + k;
+    const lab = document.createElement('label'); lab.htmlFor = id; lab.textContent = LABELS[k] || k;
+    const inp = document.createElement('input'); inp.type = 'number'; inp.id = id; inp.step = 'any'; inp.value = P[k];
+    inp.addEventListener('input', () => { const v = parseFloat(inp.value); if (isFinite(v)) { P[k] = v; LS.set('sj.params', P); } });
+    rows.append(lab, inp);
+  }
+}
+function togglePanel() { panel.hidden = !panel.hidden; if (!panel.hidden) buildPanel(); }
+document.getElementById('pClose').onclick = () => { panel.hidden = true; };
+document.getElementById('pReset').onclick = () => { Object.assign(P, DEFAULTS); LS.set('sj.params', P); buildPanel(); };
+
+// ================================================================ RENDER
+const g = cv.getContext('2d');
+let L = null, DPR = 1;
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(cv.clientWidth * DPR); cv.height = Math.round(cv.clientHeight * DPR);
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const W = cv.clientWidth, H = cv.clientHeight, gut = 16;
+  const cw = Math.max(92, Math.min(220, W * 0.18));
+  const fw = Math.min(380, (W - cw - gut * 2) / 2 - 10);
+  const y0 = Math.max(78, H * 0.14), yJ = H - Math.max(64, H * 0.12);
+  const cx = W / 2;
+  L = { W, H, cw, cx, y0, yJ, f: [{ x: cx - cw / 2 - 10 - fw, w: fw }, { x: cx + cw / 2 + 10, w: fw }] };
+}
+addEventListener('resize', resize);
+function fieldLanes(pl) {
+  const fd = L.f[pl.id - 1], mw = 16;
+  return pl.id === 1 ? { x: fd.x + mw, w: fd.w - mw, lw: (fd.w - mw) / 4, mx: fd.x + 2 } : { x: fd.x, w: fd.w - mw, lw: (fd.w - mw) / 4, mx: fd.x + fd.w - 12 };
+}
+const laneCenter = (pl, lane) => { const f = fieldLanes(pl); return f.x + f.lw * (lane + 0.5); };
+function txt(s, x, y, size, color, o = {}) {
+  g.save();
+  g.font = `${o.weight || ''} ${size}px ${o.font || F.jp}`;
+  g.textAlign = o.align || 'center'; g.textBaseline = o.base || 'middle';
+  g.globalAlpha = o.alpha == null ? 1 : o.alpha;
+  if (o.glow) { g.shadowColor = o.glowColor || color; g.shadowBlur = o.glow; }
+  if (o.stroke) { g.lineWidth = o.stroke; g.strokeStyle = o.strokeColor || '#000'; g.strokeText(s, x, y); }
+  g.fillStyle = color; g.fillText(s, x, y);
+  g.restore();
+}
+function rrect(x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+function drawBackdrop(t) {
+  const { W, H, cx } = L, hz = H * 0.54;
+  let gr = g.createLinearGradient(0, 0, 0, hz);
+  gr.addColorStop(0, '#0a0620'); gr.addColorStop(0.7, '#251048'); gr.addColorStop(1, '#4a1450');
+  g.fillStyle = gr; g.fillRect(0, 0, W, hz);
+  // stars
+  g.fillStyle = 'rgba(239,232,255,0.5)';
+  for (let i = 0; i < 60; i++) {
+    const sx = (i * 9973 % 1000) / 1000 * W, sy = (i * 7919 % 1000) / 1000 * hz * 0.8;
+    if ((i + Math.floor(t * 2)) % 7 !== 0) g.fillRect(sx, sy, 1.5, 1.5);
+  }
+  // sun
+  const r = Math.min(L.cw * 0.62, H * 0.17), sy = hz - r * 0.35;
+  gr = g.createLinearGradient(0, sy - r, 0, sy + r);
+  gr.addColorStop(0, C.sunA); gr.addColorStop(1, C.sunB);
+  g.save(); g.shadowColor = C.sunB; g.shadowBlur = 40;
+  g.beginPath(); g.arc(cx, sy, r, 0, Math.PI * 2); g.fillStyle = gr; g.fill(); g.restore();
+  g.fillStyle = '#2a0f4a';
+  for (let i = 0; i < 7; i++) {
+    const yy = sy + r * 0.05 + i * r * 0.15 + ((t * 12) % (r * 0.15)), hh = 1.5 + i * 1.6;
+    if (yy < sy + r) g.fillRect(cx - r, yy, r * 2, hh);
+  }
+  // floor
+  g.fillStyle = '#07041a'; g.fillRect(0, hz, W, H - hz);
+  g.strokeStyle = 'rgba(122,60,255,0.55)'; g.lineWidth = 1;
+  g.beginPath();
+  for (let i = -16; i <= 16; i++) { g.moveTo(cx + i * 8, hz); g.lineTo(cx + i * W * 0.12, H); }
+  const ph = (t / (M ? M.beat : 60 / P.bpm)) % 1;
+  for (let i = 0; i < 12; i++) {
+    const k = (i + ph) / 12, yy = hz + (H - hz) * k * k;
+    g.moveTo(0, yy); g.lineTo(W, yy);
+  }
+  g.stroke();
+  g.strokeStyle = C.sunB; g.globalAlpha = 0.8; g.beginPath(); g.moveTo(0, hz); g.lineTo(W, hz); g.stroke(); g.globalAlpha = 1;
+}
+
+function noteY(pl, t, now) {
+  let p = (t - now) / P.scrollSec;
+  if (pl.fx.wobble > now) p += 0.075 * Math.sin(p * 9 + now * 5) * Math.min(1, p * 2);
+  return { y: L.yJ - p * (L.yJ - L.y0), p };
+}
+function drawField(pl, now) {
+  const fd = L.f[pl.id - 1], fl = fieldLanes(pl), col = pc(pl.id), { y0, yJ } = L;
+  // panel
+  g.fillStyle = 'rgba(8,5,25,0.82)'; g.fillRect(fd.x, y0 - 8, fd.w, yJ - y0 + 52);
+  g.save(); g.shadowColor = col; g.shadowBlur = 14; g.strokeStyle = col; g.lineWidth = 1.5;
+  g.strokeRect(fd.x + 0.5, y0 - 7.5, fd.w - 1, yJ - y0 + 51); g.restore();
+  // lanes
+  for (let i = 0; i < 4; i++) {
+    const lx = fl.x + fl.lw * i;
+    const kf = now - pl.keyFlash[i];
+    if (kf >= 0 && kf < 0.14) {
+      const gr = g.createLinearGradient(0, yJ, 0, y0);
+      gr.addColorStop(0, col); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.globalAlpha = 0.35 * (1 - kf / 0.14); g.fillStyle = gr; g.fillRect(lx, y0, fl.lw, yJ - y0); g.globalAlpha = 1;
+    }
+    if (i > 0) { g.fillStyle = 'rgba(140,127,184,0.22)'; g.fillRect(lx, y0, 1, yJ - y0 + 40); }
+  }
+  // noise interference (level 2+)
+  if (pl.fx.noise > now) {
+    for (let i = 0; i < 7; i++) {
+      const yy = y0 + Math.random() * (yJ - y0 - 70), hh = 2 + Math.random() * 10;
+      g.fillStyle = `rgba(239,232,255,${0.08 + Math.random() * 0.22})`; g.fillRect(fl.x, yy, fl.w, hh);
+    }
+    if (Math.random() < 0.35) { const ln = (Math.random() * 4) | 0; g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(fl.x + fl.lw * ln, y0, fl.lw, (yJ - y0) * 0.6); }
+  }
+  // judge line + receptors
+  g.save(); g.shadowColor = col; g.shadowBlur = 12; g.fillStyle = col; g.fillRect(fl.x, yJ - 1.5, fl.w, 3); g.restore();
+  for (let i = 0; i < 4; i++) {
+    const lx = fl.x + fl.lw * i + 4, kf = now - pl.keyFlash[i];
+    g.strokeStyle = kf >= 0 && kf < 0.1 ? '#fff' : 'rgba(239,232,255,0.35)';
+    g.lineWidth = 1.5; rrect(lx, yJ - 8, fl.lw - 8, 16, 3); g.stroke();
+    txt(keyName(KEYS[pl.id][i]), fl.x + fl.lw * (i + 0.5), yJ + 26, 13, pl.cpu ? '#00000000' : C.dim, { font: F.num });
+  }
+  // ghosts (level 4)
+  for (const gn of pl.ghosts) {
+    const { y, p } = noteY(pl, gn.t, now), a = Math.min(1, (p - 0.28) / 0.25);
+    g.globalAlpha = Math.max(0, a) * 0.7; g.strokeStyle = pc(gn.from); g.lineWidth = 1.5;
+    rrect(fl.x + fl.lw * gn.lane + 4, y - 7, fl.lw - 8, 14, 3); g.stroke(); g.globalAlpha = 1;
+  }
+  // notes
+  g.save(); g.beginPath(); g.rect(fl.x, y0 - 8, fl.w, yJ - y0 + 30); g.clip();
+  for (const n of pl.notes) {
+    if (n.judged) continue;
+    const { y, p } = noteY(pl, n.t, now);
+    if (p > 1.08) break;
+    if (p < -0.2) continue;
+    const nx = fl.x + fl.lw * n.lane + 4, nw = fl.lw - 8;
+    if (n.jam) {
+      const jx = (Math.random() - 0.5) * 3, jc = pc(n.from);
+      g.save(); g.shadowColor = jc; g.shadowBlur = 14;
+      rrect(nx + jx, y - 8, nw, 16, 3); g.fillStyle = jc; g.fill(); g.restore();
+      g.save(); rrect(nx + jx, y - 8, nw, 16, 3); g.clip();
+      g.fillStyle = 'rgba(11,8,32,0.75)';
+      const off = (now * 60) % 10;
+      for (let sx = -20; sx < nw + 20; sx += 10) { g.beginPath(); g.moveTo(nx + jx + sx + off, y - 8); g.lineTo(nx + jx + sx + off + 5, y - 8); g.lineTo(nx + jx + sx + off - 3, y + 8); g.lineTo(nx + jx + sx + off - 8, y + 8); g.fill(); }
+      g.restore();
+      g.strokeStyle = '#fff'; g.lineWidth = 1.5; rrect(nx + jx, y - 8, nw, 16, 3); g.stroke();
+    } else {
+      g.save(); g.shadowColor = col; g.shadowBlur = 8;
+      rrect(nx, y - 6, nw, 12, 3); g.fillStyle = col; g.fill(); g.restore();
+      g.fillStyle = 'rgba(255,255,255,0.75)'; g.fillRect(nx + 3, y - 4, nw - 6, 2);
+    }
+  }
+  g.restore();
+  // voltage meter
+  const mH = yJ - y0, mx = fl.mx, lvH = mH / 4, vr = pl.volt / (P.voltPerLevel * 4);
+  for (let i = 0; i < 4; i++) {
+    const by = yJ - (i + 1) * lvH;
+    g.strokeStyle = 'rgba(140,127,184,0.4)'; g.lineWidth = 1; g.strokeRect(mx + 0.5, by + 2.5, 9, lvH - 4);
+  }
+  const fillH = mH * vr;
+  if (fillH > 0) {
+    const gr = g.createLinearGradient(0, yJ, 0, y0);
+    gr.addColorStop(0, col); gr.addColorStop(0.5, C.sunA); gr.addColorStop(1, C.sunB);
+    g.save(); g.shadowColor = col; g.shadowBlur = vr >= 0.25 ? 12 : 0;
+    g.fillStyle = gr; g.fillRect(mx + 2, yJ - fillH, 6, fillH); g.restore();
+  }
+  // header
+  const hx = fd.x + fd.w / 2;
+  txt(`P${pl.id}`, pl.id === 1 ? fd.x + 4 : fd.x + fd.w - 4, y0 - 30, 22, col, { font: F.num, align: pl.id === 1 ? 'left' : 'right', glow: 10 });
+  txt(`${pl.cpu ? 'CPU ' : ''}${DIFFS[pl.diff]}`, pl.id === 1 ? fd.x + 40 : fd.x + fd.w - 40, y0 - 29, 13, C.dim, { font: F.num, align: pl.id === 1 ? 'left' : 'right' });
+  const lv = Math.min(4, Math.floor(pl.volt / P.voltPerLevel));
+  const sk = keyName(KEYS[pl.id][4]) + (pl.id === 1 && cfg.mode === 'cpu' ? '/SPACE' : '');
+  txt(lv > 0 ? `送信 LV${lv}${pl.cpu ? '' : ` [${sk}]`}` : '電圧', pl.id === 1 ? fd.x + fd.w - 4 : fd.x + 4, y0 - 29, 13, lv > 0 ? C.sunA : C.dim,
+    { align: pl.id === 1 ? 'right' : 'left', glow: lv > 0 ? 8 : 0, alpha: lv > 0 ? 0.75 + 0.25 * Math.sin(now * 12) : 1 });
+  // combo
+  if (pl.combo >= 5) {
+    txt(String(pl.combo), hx, y0 + (yJ - y0) * 0.36, Math.min(54, fd.w * 0.2), col, { font: F.num, alpha: 0.28 });
+    txt('COMBO', hx, y0 + (yJ - y0) * 0.36 + 30, 12, col, { font: F.num, alpha: 0.4 });
+  }
+  // popups (judgement holds during hitstop, then settles)
+  for (const [slot, yy] of [['popJ', yJ - 44], ['popE', y0 + (yJ - y0) * 0.55]]) {
+    const pp = pl[slot]; if (!pp) continue;
+    const age = now - pp.t; if (age > pp.hold + 0.55) { pl[slot] = null; continue; }
+    let sc, al = 1, jx = 0;
+    if (age < pp.hold) { sc = 1.45; jx = (Math.random() - 0.5) * 3; }
+    else { const a = age - pp.hold; sc = 1.45 - Math.min(0.45, a * 5); al = 1 - Math.max(0, (a - 0.3) / 0.25); }
+    const sz = Math.min(26, fd.w * 0.09) * pp.size * sc;
+    txt(pp.text, hx + jx, yy, sz, pp.color, { font: F.num, glow: 12, alpha: al, stroke: 3, strokeColor: 'rgba(11,8,32,0.9)' });
+    if (pp.sub) txt(pp.sub, hx, yy + sz * 0.7, 11, pp.sub === 'FAST' ? C.p1 : C.sunB, { font: F.num, alpha: al });
+  }
+}
+function drawCenter(now) {
+  const { cx, cw, y0, yJ } = L, w = cw - 14, x = cx - w / 2;
+  // progress
+  const pr = Math.max(0, Math.min(1, now / M.songEnd));
+  g.fillStyle = 'rgba(140,127,184,0.3)'; g.fillRect(x, y0 - 46, w, 3);
+  g.fillStyle = C.ink; g.fillRect(x, y0 - 46, w * pr, 3);
+  // tug meter
+  const ty = y0 - 26, d = M.dom / P.domKO;
+  g.fillStyle = 'rgba(8,5,25,0.85)'; g.fillRect(x, ty, w, 14);
+  const mid = cx, mk = cx - d * (w / 2);
+  g.save(); g.shadowBlur = 10;
+  if (d > 0) { g.fillStyle = C.p1; g.shadowColor = C.p1; g.fillRect(mk, ty + 2, mid - mk, 10); }
+  else if (d < 0) { g.fillStyle = C.p2; g.shadowColor = C.p2; g.fillRect(mid, ty + 2, mk - mid, 10); }
+  g.restore();
+  g.fillStyle = '#fff'; g.fillRect(mk - 1.5, ty - 3, 3, 20);
+  g.strokeStyle = 'rgba(239,232,255,0.5)'; g.strokeRect(x + 0.5, ty + 0.5, w - 1, 13);
+  const ow = owner();
+  txt('主旋律', cx, ty + 30, 13, C.dim);
+  txt(ow === 1 ? '◀ P1' : ow === 2 ? 'P2 ▶' : '拮抗', cx, ty + 50, 18, ow === 1 ? C.p1 : ow === 2 ? C.p2 : C.ink, { font: ow ? F.num : F.jp, glow: ow ? 10 : 0 });
+  // packets
+  for (const pk of M.packets) {
+    const k = Math.max(0, Math.min(1, (now - pk.t0) / (pk.t1 - pk.t0)));
+    const a = L.f[pk.from.id - 1], b = L.f[pk.to.id - 1];
+    const ax = a.x + a.w / 2, bx = b.x + b.w / 2, ay = y0 + 30, cy = y0 - 40;
+    const pos = q => { const e = q; return { x: (1 - e) * (1 - e) * ax + 2 * (1 - e) * e * cx + e * e * bx, y: (1 - e) * (1 - e) * ay + 2 * (1 - e) * e * cy + e * e * ay }; };
+    const col = pc(pk.from.id), rad = pk.level ? 5 + pk.level * 3 : 4;
+    for (let i = 6; i >= 0; i--) {
+      const p = pos(Math.max(0, k - i * 0.035));
+      g.globalAlpha = (1 - i / 7) * 0.8; g.fillStyle = col;
+      g.beginPath(); g.arc(p.x, p.y, rad * (1 - i / 9), 0, Math.PI * 2); g.fill();
+    }
+    g.globalAlpha = 1;
+    const p = pos(k);
+    g.save(); g.shadowColor = col; g.shadowBlur = 20; g.fillStyle = '#fff'; g.beginPath(); g.arc(p.x, p.y, rad * 0.55, 0, Math.PI * 2); g.fill(); g.restore();
+  }
+  // logo foot
+  txt('SIGNAL JACK', cx, yJ + 26, Math.min(15, cw * 0.11), C.dim, { font: F.logo, alpha: 0.8 });
+}
+function drawParticles(now) {
+  for (const p of M.particles) {
+    const a = now - p.t0;
+    if (a > p.life) { p.dead = true; continue; }
+    const ta = Math.max(0, a);
+    g.globalAlpha = 1 - ta / p.life; g.fillStyle = p.color;
+    g.fillRect(p.x + p.vx * ta, p.y + p.vy * ta + 300 * ta * ta, p.s, p.s);
+  }
+  g.globalAlpha = 1;
+  M.particles = M.particles.filter(p => !p.dead);
+}
+function drawCountIn(now) {
+  if (now >= INTRO_BARS * 4 * M.beat) return;
+  const b = Math.floor(now / M.beat), frac = now / M.beat - b;
+  const s = b < 4 ? 'READY' : b < 7 ? String(7 - b) : 'GO!';
+  if (b < 0) return;
+  txt(s, L.cx, L.H * 0.4, (b < 4 ? 40 : 72) * (1 + 0.15 * (1 - frac)), b === 7 ? C.sunA : C.ink, { font: F.num, glow: 20, glowColor: C.sunB, alpha: 1 - frac * 0.5, stroke: 4, strokeColor: '#0b0820' });
+}
+function drawHint() {
+  if (!hint) return;
+  const age = performance.now() / 1000 - hint.t0;
+  if (age > 5) { hint = null; return; }
+  const al = Math.min(1, age * 4) * Math.min(1, (5 - age) * 2);
+  const w = Math.min(L.W - 32, 640), y = L.H - 22;
+  g.globalAlpha = al * 0.9; g.fillStyle = '#05030f'; g.fillRect(L.cx - w / 2, y - 15, w, 30);
+  g.strokeStyle = C.sunA; g.strokeRect(L.cx - w / 2 + 0.5, y - 14.5, w - 1, 29); g.globalAlpha = 1;
+  txt(hint.text, L.cx, y, Math.max(11, Math.min(15, w / 42)), C.sunA, { alpha: al });
+}
+function drawGame(now, wall) {
+  const { W, H } = L;
+  g.save();
+  const sa = now - M.shakeT;
+  if (sa >= 0 && sa < 0.3 && M.shake > 0) {
+    const k = M.shake * (1 - sa / 0.3);
+    g.translate((Math.random() - 0.5) * k * 2, (Math.random() - 0.5) * k);
+  }
+  drawBackdrop(state === 'pause' ? now : Math.max(now, 0) + 10);
+  for (const pl of M.pl) drawField(pl, now);
+  drawCenter(now);
+  drawParticles(now);
+  g.restore();
+  // flash: light / dark alternation
+  const fa = now - M.flashT;
+  if (fa >= 0 && fa < 0.12) {
+    g.fillStyle = fa < 0.035 ? 'rgba(255,255,255,0.45)' : fa < 0.075 ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.18)';
+    g.fillRect(0, 0, W, H);
+  }
+  drawCountIn(now);
+  drawHint();
+  if (state === 'pause') {
+    g.fillStyle = 'rgba(5,3,15,0.75)'; g.fillRect(0, 0, W, H);
+    txt('一時停止', L.cx, H * 0.42, 34, C.ink, { glow: 12, glowColor: C.p1 });
+    txt('Esc / Enter：再開　　Q：タイトルへ', L.cx, H * 0.42 + 46, 15, C.dim);
+  }
+  if (state === 'result') drawResult(wall);
+}
+function drawResult(wall) {
+  const r = M.result, age = wall - r.at, { W, H, cx } = L;
+  g.fillStyle = `rgba(5,3,15,${Math.min(0.78, age * 2)})`; g.fillRect(0, 0, W, H);
+  const pop = Math.min(1, age * 5);
+  const head = r.winner === 0 ? 'DRAW' : `P${r.winner} WIN`;
+  const hc = r.winner === 0 ? C.ink : pc(r.winner);
+  txt(r.reason === 'ko' ? 'SIGNAL JACKED!' : '放送終了', cx, H * 0.17, 16, C.sunA, { font: r.reason === 'ko' ? F.num : F.jp, alpha: pop });
+  txt(head, cx, H * 0.17 + 44, Math.min(64, W * 0.1) * (0.6 + 0.4 * pop), hc, { font: F.logo, glow: 24, alpha: pop });
+  // confetti for winner side
+  if (r.winner) {
+    const fd = L.f[r.winner - 1];
+    for (let i = 0; i < 24; i++) {
+      const x = fd.x + ((i * 97 + 13) % 100) / 100 * fd.w, y = ((age * (60 + (i % 5) * 25) + i * 37) % (H * 0.9));
+      g.fillStyle = [C.p1, C.p2, C.sunA, '#fff'][i % 4]; g.fillRect(x + Math.sin(age * 3 + i) * 8, y, 5, 3);
+    }
+  }
+  for (const pl of M.pl) {
+    const fd = L.f[pl.id - 1], x = fd.x + fd.w / 2, y = H * 0.36, s = pl.stats, col = pc(pl.id);
+    txt(`P${pl.id}${pl.cpu ? ' CPU' : ''}`, x, y, 20, col, { font: F.num, glow: 8 });
+    txt(praise(pl), x, y + 30, Math.min(20, fd.w * 0.08), C.sunA, { glow: 8 });
+    const lines = [['PERFECT', s.P], ['GREAT', s.G], ['GOOD', s.D], ['MISS', s.M], ['最大コンボ', pl.maxCombo], ['送信', s.sends], ['反射', s.reflects]];
+    lines.forEach(([k, v], i) => {
+      const yy = y + 64 + i * 22;
+      txt(k, x - fd.w * 0.32, yy, 13, C.dim, { align: 'left' });
+      txt(String(v), x + fd.w * 0.32, yy, 15, C.ink, { font: F.num, align: 'right' });
+    });
+  }
+  if (age > 0.6) txt('Enter / タップ：もう一度　　Esc：タイトル', cx, H * 0.86, 15, C.ink, { alpha: 0.6 + 0.4 * Math.sin(wall * 4) });
+}
+function drawTitle(wall) {
+  const { W, H, cx } = L;
+  drawBackdrop(wall);
+  g.fillStyle = 'rgba(5,3,15,0.35)'; g.fillRect(0, 0, W, H);
+  const ls = Math.min(78, W * 0.11);
+  txt('SIGNAL JACK', cx, H * 0.2, ls, C.p1, { font: F.logo, glow: 28, glowColor: C.p2 });
+  txt('電波ジャック ── レトロフューチャー対戦音ゲー（試作）', cx, H * 0.2 + ls * 0.75, Math.max(12, Math.min(17, W / 40)), C.ink);
+  const bw = Math.min(560, W - 32), bx = cx - bw / 2, by = H * 0.38, lh = Math.max(24, Math.min(30, H * 0.042));
+  g.fillStyle = 'rgba(8,5,25,0.88)'; g.fillRect(bx, by, bw, lh * 8.6);
+  g.strokeStyle = C.p2; g.strokeRect(bx + 0.5, by + 0.5, bw - 1, lh * 8.6 - 1);
+  const fs = Math.max(12, Math.min(15, bw / 34));
+  if (state === 'keycfg') {
+    txt('キー設定 ── 光っている項目のキーを押す（Esc でやめる）', cx, by + lh * 0.8, fs, C.sunA);
+    const names = ['レーン1', 'レーン2', 'レーン3', 'レーン4', '送信'];
+    KEYCFG_STEPS.forEach(([id, i], k) => {
+      const col = k < 5 ? 0 : 1, row = k % 5, xx = bx + bw * (col ? 0.55 : 0.08), yy = by + lh * (2 + row * 1.2);
+      const cur = k === keycfgIdx;
+      txt(`P${id} ${names[i]}`, xx, yy, fs, cur ? C.sunA : C.dim, { align: 'left', glow: cur ? 8 : 0 });
+      txt(keyName(keycfgDraft[id][i]), xx + bw * 0.3, yy, fs, cur ? C.sunA : pc(id), { font: F.num, align: 'left' });
+    });
+    return;
+  }
+  const rows2 = [
+    ['モード', cfg.mode === 'cpu' ? 'CPUと対戦' : 'ふたりで対戦（同じキーボード）', 'M'],
+    ['P1 の難しさ', DIFFS[cfg.d1], 'Z'],
+    [cfg.mode === 'cpu' ? 'CPU の強さ' : 'P2 の難しさ', DIFFS[cfg.d2], '/'],
+    ['音ズレ補正', `${cfg.offset > 0 ? '+' : ''}${cfg.offset} ms（FASTが多いなら＋）`, '← →'],
+    ['キー設定', `P1 ${laneKeysText(1)} / ${keyName(KEYS[1][4])}　P2 ${laneKeysText(2)} / ${keyName(KEYS[2][4])}`, 'K'],
+    ['パラメータ調整', '数値をその場で変える', 'F2'],
+  ];
+  rows2.forEach(([k, v, key], i) => {
+    const yy = by + lh * (0.9 + i);
+    txt(k, bx + 16, yy, fs, C.dim, { align: 'left' });
+    txt(v, bx + bw * 0.3, yy, fs, C.ink, { align: 'left' });
+    txt(key, bx + bw - 16, yy, fs, C.p1, { font: F.num, align: 'right' });
+  });
+  txt('Enter / クリックでスタート', cx, by + lh * 7.6, fs + 4, C.sunA, { glow: 12, alpha: 0.7 + 0.3 * Math.sin(wall * 4) });
+  const rules = ['PERFECT で電圧がたまる → 送信キーで相手に干渉を送る（ためるほど強い・ミスで全部消える）',
+    '相手の干渉ノーツを PERFECT で叩くと跳ね返る ── 優勢な側の楽器が曲の主旋律を取る'];
+  rules.forEach((s, i) => txt(s, cx, by + lh * 8.6 + 22 + i * 20, Math.max(10, Math.min(13, W / 62)), C.dim));
+  if (coarse) txt('タッチ：左のレーンを叩く・中央の列で送信', cx, by + lh * 8.6 + 64, 12, C.dim);
+}
+
+function frame() {
+  const wall = performance.now() / 1000;
+  if (!L) resize();
+  g.clearRect(0, 0, L.W, L.H);
+  if (M && (state === 'play' || state === 'pause' || state === 'result')) {
+    const now = songNow();
+    if (state === 'play') update(now);
+    drawGame(now, wall);
+  } else drawTitle(wall);
+  requestAnimationFrame(frame);
+}
+resize();
+requestAnimationFrame(frame);
+</script>
