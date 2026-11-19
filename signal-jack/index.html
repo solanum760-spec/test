@@ -79,7 +79,7 @@ const DEFAULTS = {
   hitstopMs: 60, reflectStopMs: 140, shakeReflect: 12,
 };
 const LABELS = {
-  bpm: '【BPM】', scrollSec: '【ノーツが落ちてくる秒数】',
+  bpm: '【テンポ基準 BPM（128で原曲どおり）】', scrollSec: '【ノーツが落ちてくる秒数】',
   perfectMs: '【PERFECT判定幅 ms】', greatMs: '【GREAT判定幅 ms】', goodMs: '【GOOD判定幅 ms】',
   voltPerfect: '【PERFECTでたまる電圧】', voltGreat: '【GREATでたまる電圧】', voltPerLevel: '【干渉1段に要る電圧】',
   domPerfect: '【PERFECTで動く主旋律】', domGreat: '【GREATで動く主旋律】', domMiss: '【MISSで失う主旋律】',
@@ -116,39 +116,115 @@ const pc = id => (id === 1 ? C.p1 : C.p2);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
 
-// ---- 曲データ（Aマイナー Am-F-C-G、主旋律がそのまま譜面になる） ----
-const CHORDS = [
-  { root: 45, tones: [57, 60, 64] }, { root: 41, tones: [53, 57, 60] },
-  { root: 48, tones: [55, 60, 64] }, { root: 43, tones: [55, 59, 62] },
+// ---- 曲データ（主旋律がそのまま譜面になる） ----
+// chords: 4小節ループ {root: ベースのMIDI, tones: パッドのMIDI}
+// A / B: 4小節のフレーズ。[16分の位置, 主音(mel)からの半音, 長さ(16分)]
+// form: 8小節ブロックの並び。swing: 裏の16分を遅らせる割合（0〜0.5）
+const SONGS = [
+  {
+    title: 'NEON HIGHWAY', mood: '夜の高速を走る王道シンセウェイヴ。まずはこれ。',
+    feature: '四つ打ち・8分中心。いちばん素直な譜面', bpm: 128, swing: 0, mel: 69,
+    drums: 'four', bass: 'octave', pad: 'sustain', form: ['A', 'B', 'A', 'B', 'A'],
+    pal: { sky: ['#0a0620', '#251048', '#4a1450'], sunA: '#ffd36a', sunB: '#ff3f8e', grid: '122,60,255', stripe: '#2a0f4a' },
+    chords: [{ root: 45, tones: [57, 60, 64] }, { root: 41, tones: [53, 57, 60] }, { root: 48, tones: [55, 60, 64] }, { root: 43, tones: [55, 59, 62] }],
+    A: [
+      [[0, 0, 3], [3, 3, 1], [4, 7, 2], [6, 12, 2], [8, 10, 2], [10, 7, 2], [12, 3, 2], [14, 7, 2]],
+      [[0, 8, 3], [3, 7, 1], [4, 5, 2], [6, 3, 2], [8, 5, 3], [11, 7, 1], [12, 8, 4]],
+      [[0, 7, 2], [2, 3, 2], [4, 7, 2], [6, 10, 2], [8, 12, 3], [11, 10, 1], [12, 7, 4]],
+      [[0, 10, 2], [2, 7, 2], [4, 5, 2], [6, 2, 2], [8, 7, 4], [12, 10, 2], [14, 14, 2]],
+    ],
+    B: [
+      [[0, 12, 1], [1, 10, 1], [2, 12, 1], [3, 15, 1], [4, 19, 2], [6, 17, 2], [8, 15, 1], [9, 14, 1], [10, 12, 2], [12, 15, 2], [14, 12, 2]],
+      [[0, 17, 2], [2, 15, 1], [3, 12, 1], [4, 15, 2], [6, 12, 2], [8, 8, 2], [10, 12, 2], [12, 15, 4]],
+      [[0, 19, 1], [1, 17, 1], [2, 15, 2], [4, 19, 2], [6, 22, 2], [8, 19, 2], [10, 15, 2], [12, 12, 2], [14, 15, 2]],
+      [[0, 14, 2], [2, 10, 2], [4, 7, 1], [5, 10, 1], [6, 14, 2], [8, 17, 3], [11, 14, 1], [12, 19, 4]],
+    ],
+  },
+  {
+    title: 'CHROME LULLABY', mood: 'ゆったりした半分テンポのバラード。長い音が多い。',
+    feature: 'ノーツは少なめ。干渉の読み合いに集中できる', bpm: 96, swing: 0, mel: 64,
+    drums: 'half', bass: 'long', pad: 'sustain', form: ['A', 'B', 'A', 'B'],
+    pal: { sky: ['#030a22', '#0d2350', '#1f3f78'], sunA: '#b8fbff', sunB: '#6a5cff', grid: '80,170,255', stripe: '#0d2350' },
+    chords: [{ root: 40, tones: [55, 59, 64] }, { root: 36, tones: [52, 55, 59] }, { root: 43, tones: [55, 59, 62] }, { root: 38, tones: [54, 57, 62] }],
+    A: [
+      [[0, 7, 4], [4, 10, 1], [5, 12, 1], [6, 14, 2], [8, 10, 4], [12, 7, 2], [14, 5, 1], [15, 3, 1]],
+      [[0, 3, 6], [6, 5, 2], [8, 7, 4], [12, 3, 4]],
+      [[0, 2, 4], [4, 3, 1], [5, 5, 1], [6, 7, 2], [8, 10, 6], [14, 7, 1], [15, 5, 1]],
+      [[0, 5, 4], [4, 2, 2], [6, 5, 2], [8, 10, 8]],
+    ],
+    B: [
+      [[0, 19, 4], [4, 17, 1], [5, 15, 1], [6, 14, 2], [8, 12, 1], [9, 14, 1], [10, 15, 2], [12, 12, 4]],
+      [[0, 15, 4], [4, 12, 2], [6, 10, 2], [8, 12, 6], [14, 15, 2]],
+      [[0, 14, 1], [1, 15, 1], [2, 17, 2], [4, 19, 4], [8, 22, 3], [11, 19, 1], [12, 22, 4]],
+      [[0, 22, 6], [6, 19, 2], [8, 17, 4], [12, 14, 4]],
+    ],
+  },
+  {
+    title: 'TURBO BLITZ', mood: '160BPMで突っ走るアクセル全開ナンバー。',
+    feature: 'HARD は16分の連打。電圧がすぐたまるので撃ち合いになる', bpm: 160, swing: 0, mel: 62,
+    drums: 'break', bass: 'gallop', pad: 'stab', form: ['A', 'B', 'A', 'B', 'A', 'B'],
+    pal: { sky: ['#14030a', '#4a0a1e', '#8a1a20'], sunA: '#ffef5a', sunB: '#ff3a2a', grid: '255,80,60', stripe: '#4a0a1e' },
+    chords: [{ root: 38, tones: [57, 62, 65] }, { root: 34, tones: [58, 62, 65] }, { root: 36, tones: [55, 60, 64] }, { root: 33, tones: [57, 61, 64] }],
+    A: [
+      [[0, 12, 2], [2, 7, 2], [4, 10, 2], [6, 12, 2], [8, 15, 2], [10, 12, 2], [12, 10, 2], [14, 7, 2]],
+      [[0, 8, 2], [2, 5, 2], [4, 8, 2], [6, 10, 2], [8, 12, 2], [10, 10, 2], [12, 8, 2], [14, 5, 2]],
+      [[0, 7, 2], [2, 10, 2], [4, 12, 2], [6, 14, 2], [8, 15, 4], [12, 14, 2], [14, 12, 2]],
+      [[0, 11, 2], [2, 14, 2], [4, 19, 4], [8, 14, 2], [10, 11, 2], [12, 7, 4]],
+    ],
+    B: [
+      [[0, 12, 1], [1, 14, 1], [2, 15, 1], [3, 17, 1], [4, 19, 2], [6, 17, 1], [7, 15, 1], [8, 14, 2], [10, 12, 2], [12, 15, 1], [13, 14, 1], [14, 12, 2]],
+      [[0, 10, 1], [1, 12, 1], [2, 14, 1], [3, 15, 1], [4, 17, 2], [6, 14, 2], [8, 10, 2], [10, 14, 1], [11, 15, 1], [12, 17, 4]],
+      [[0, 19, 2], [2, 17, 1], [3, 15, 1], [4, 14, 2], [6, 12, 2], [8, 10, 1], [9, 12, 1], [10, 14, 1], [11, 15, 1], [12, 19, 4]],
+      [[0, 19, 2], [2, 23, 1], [3, 19, 1], [4, 26, 2], [6, 23, 2], [8, 19, 2], [10, 14, 1], [11, 11, 1], [12, 7, 4]],
+    ],
+  },
+  {
+    title: 'ORBITAL FUNK', mood: '宇宙ステーションのラウンジで跳ねるファンク。',
+    feature: 'シャッフル（跳ねる16分）。裏拍の取り方が鍵', bpm: 112, swing: 0.3, mel: 67,
+    drums: 'funk', bass: 'funk', pad: 'offbeat', form: ['A', 'B', 'A', 'B', 'A'],
+    pal: { sky: ['#02100e', '#06302a', '#0f5a44'], sunA: '#e6ff5a', sunB: '#22e0a0', grid: '60,255,170', stripe: '#06302a' },
+    chords: [{ root: 43, tones: [58, 62, 65] }, { root: 48, tones: [58, 64, 67] }, { root: 43, tones: [58, 62, 65] }, { root: 38, tones: [54, 57, 60] }],
+    A: [
+      [[0, 0, 1], [3, 3, 1], [6, 5, 2], [8, 7, 1], [10, 10, 2], [14, 7, 2]],
+      [[2, 9, 1], [3, 10, 1], [6, 9, 2], [10, 7, 2], [12, 5, 2], [14, 3, 2]],
+      [[0, 0, 1], [3, 3, 1], [6, 5, 2], [8, 7, 1], [10, 12, 2], [13, 10, 1], [14, 7, 2]],
+      [[0, 7, 2], [3, 11, 1], [4, 14, 2], [7, 12, 1], [8, 11, 2], [12, 7, 4]],
+    ],
+    B: [
+      [[0, 12, 1], [1, 10, 1], [2, 12, 1], [4, 15, 2], [7, 17, 1], [8, 19, 2], [11, 17, 1], [12, 15, 2], [14, 12, 2]],
+      [[0, 21, 1], [1, 22, 1], [2, 21, 1], [4, 12, 2], [6, 10, 1], [7, 9, 1], [8, 10, 2], [10, 12, 1], [11, 21, 1], [12, 19, 4]],
+      [[0, 22, 2], [3, 19, 1], [4, 17, 1], [5, 15, 1], [6, 17, 2], [8, 19, 1], [10, 15, 2], [12, 12, 1], [13, 10, 1], [14, 12, 2]],
+      [[0, 14, 1], [1, 17, 1], [2, 19, 2], [4, 23, 2], [6, 19, 1], [7, 17, 1], [8, 14, 2], [11, 11, 1], [12, 7, 4]],
+    ],
+  },
 ];
-// [16分の位置, A4からの半音, 長さ(16分)]
-const PHRASE_A = [
-  [[0, 0, 3], [3, 3, 1], [4, 7, 2], [6, 12, 2], [8, 10, 2], [10, 7, 2], [12, 3, 2], [14, 7, 2]],
-  [[0, 8, 3], [3, 7, 1], [4, 5, 2], [6, 3, 2], [8, 5, 3], [11, 7, 1], [12, 8, 4]],
-  [[0, 7, 2], [2, 3, 2], [4, 7, 2], [6, 10, 2], [8, 12, 3], [11, 10, 1], [12, 7, 4]],
-  [[0, 10, 2], [2, 7, 2], [4, 5, 2], [6, 2, 2], [8, 7, 4], [12, 10, 2], [14, 14, 2]],
-];
-const PHRASE_B = [
-  [[0, 12, 1], [1, 10, 1], [2, 12, 1], [3, 15, 1], [4, 19, 2], [6, 17, 2], [8, 15, 1], [9, 14, 1], [10, 12, 2], [12, 15, 2], [14, 12, 2]],
-  [[0, 17, 2], [2, 15, 1], [3, 12, 1], [4, 15, 2], [6, 12, 2], [8, 8, 2], [10, 12, 2], [12, 15, 4]],
-  [[0, 19, 1], [1, 17, 1], [2, 15, 2], [4, 19, 2], [6, 22, 2], [8, 19, 2], [10, 15, 2], [12, 12, 2], [14, 15, 2]],
-  [[0, 14, 2], [2, 10, 2], [4, 7, 1], [5, 10, 1], [6, 14, 2], [8, 17, 3], [11, 14, 1], [12, 19, 4]],
-];
-const INTRO_BARS = 2, MAIN_BARS = 40, OUTRO_BARS = 2, TOTAL_BARS = INTRO_BARS + MAIN_BARS + OUTRO_BARS;
-function sectionOf(bar) {
+const INTRO_BARS = 2, OUTRO_BARS = 2;
+const mainBars = song => song.form.length * 8;
+const totalBars = song => INTRO_BARS + mainBars(song) + OUTRO_BARS;
+function sectionOf(song, bar) {
   if (bar < INTRO_BARS) return 'intro';
-  if (bar >= INTRO_BARS + MAIN_BARS) return 'outro';
-  return Math.floor((bar - INTRO_BARS) / 8) % 2 === 0 ? 'A' : 'B';
+  if (bar >= INTRO_BARS + mainBars(song)) return 'outro';
+  return song.form[Math.floor((bar - INTRO_BARS) / 8)];
 }
-function melodyBar(bar) {
-  const s = sectionOf(bar);
+function melodyBar(song, bar) {
+  const s = sectionOf(song, bar);
   if (s !== 'A' && s !== 'B') return null;
-  return (s === 'A' ? PHRASE_A : PHRASE_B)[(bar - INTRO_BARS) % 4];
+  return song[s][(bar - INTRO_BARS) % 4];
+}
+// 16分の n 番目の時刻（裏の16分だけスウィングで遅らせる）
+const stepTime = (n, st, swing) => n * st + (n % 2 ? swing * st : 0);
+// 譜面の密度から出す目安レベル（1〜15）
+function songLevels(song) {
+  const beat = 60 / song.bpm, dur = mainBars(song) * 4 * beat;
+  return [0, 1, 2].map(d => Math.max(1, Math.min(15, Math.round(buildChart(song, d, beat).length / dur * 2.6))));
 }
 
 // ---- 状態 ----
-let state = 'title'; // title | keycfg | play | pause | result
+let state = 'title'; // title | keycfg | select | play | pause | result
 let M = null;        // 試合
+let PV = null;       // 選曲画面の試聴
+let selIdx = Math.max(0, Math.min(SONGS.length - 1, LS.get('sj.song', 0) | 0));
+let selRows = [];    // 選曲画面の行の当たり判定
 const hintSeen = {};
 let hint = null;     // {text, t0(wall)}
 
@@ -171,6 +247,11 @@ function ensureAudio() {
   noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  schedTimer = setInterval(tick, 25);
+}
+function unmute() {
+  const t = ac.currentTime;
+  master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(0.8, t);
 }
 const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
 function env(gn, t, a, peak, dur) {
@@ -211,6 +292,8 @@ const hat = (t, open) => noise(t, open ? 0.12 : 0.035, open ? 0.12 : 0.15, music
 const crash = t => noise(t, 1.3, 0.22, musicBus, { hp: 4200 });
 const bass = (m, t, d) => tone('sawtooth', mtof(m), t, d, 0.26, musicBus, { lp: 720, q: 5 });
 const pad = (tones, t, d) => tones.forEach(m => tone('triangle', mtof(m), t, d, 0.045, musicBus, { a: 0.25 }));
+const stab = (tones, t, d) => tones.forEach(m => tone('sawtooth', mtof(m), t, d, 0.035, musicBus, { lp: 1800, q: 2 }));
+const ghostSnare = t => noise(t, 0.05, 0.1, musicBus, { bp: 2200 });
 function lead(owner, midi, t, dur) {
   const f = mtof(midi);
   if (owner === 1) { // P1：明るいノコギリ波2本
@@ -254,26 +337,64 @@ function sfxEnd(win) {
   ch.forEach((m, i) => tone('sawtooth', mtof(m), t + i * 0.06, 0.9, 0.08, sfxBus, { lp: 3000 }));
 }
 
-// --- スケジューラ ---
-function startScheduler() {
-  clearInterval(schedTimer);
-  schedTimer = setInterval(schedule, 25);
-  schedule();
-}
-function schedule() {
-  if (!M || !ac) return;
-  const st = M.beat / 4;
-  while (true) {
-    if (M.musicStopped || M.nextStep >= TOTAL_BARS * 16) { clearInterval(schedTimer); return; }
-    const t = M.startAt + M.nextStep * st;
-    if (t > ac.currentTime + 0.12) break;
-    playStep(M.nextStep, t);
-    M.nextStep++;
+// --- スケジューラ（試合と試聴で共用。常時25msごとに先読み） ---
+function tick() {
+  if (!ac || state === 'pause') return;
+  const ahead = ac.currentTime + 0.12;
+  if (PV) {
+    const song = PV.song, st = 60 / song.bpm / 4;
+    while (true) {
+      const t = PV.startAt + stepTime(PV.k, st, song.swing);
+      if (t > ahead) break;
+      const bar = INTRO_BARS + (Math.floor(PV.k / 16) % 8); // 最初の8小節（Aブロック）をループ
+      playStep(song, bar * 16 + (PV.k % 16), t, 1);
+      PV.k++;
+    }
+  } else if (M && !M.musicStopped) {
+    const song = M.song, st = M.beat / 4, end = totalBars(song) * 16;
+    while (M.nextStep < end) {
+      const t = M.startAt + stepTime(M.nextStep, st, song.swing);
+      if (t > ahead) break;
+      playStep(song, M.nextStep, t, owner());
+      M.nextStep++;
+    }
   }
 }
 function owner() { return M.dom > P.ownerTh ? 1 : M.dom < -P.ownerTh ? 2 : 0; }
-function playStep(n, t) {
-  const bar = Math.floor(n / 16), s = n % 16, sec = sectionOf(bar), st = M.beat / 4, ch = CHORDS[bar % 4];
+function playDrums(style, s, t, sec) {
+  if (style === 'four') {
+    if (s % 4 === 0) kick(t);
+    if (s === 4 || s === 12) snare(t);
+    if (s % 4 === 2) hat(t, true); else if (sec === 'B' || s % 2 === 0) hat(t, false);
+  } else if (style === 'half') {
+    if (s === 0 || s === 10) kick(t);
+    if (s === 8) snare(t);
+    if (s === 14) hat(t, true); else if (s % 2 === 0 || (sec === 'B' && s % 4 === 3)) hat(t, false);
+  } else if (style === 'break') {
+    if (s === 0 || s === 6 || s === 10) kick(t);
+    if (s === 4 || s === 12) snare(t);
+    if (s === 7 || s === 15) ghostSnare(t);
+    hat(t, s === 14 && sec === 'B');
+  } else if (style === 'funk') {
+    if (s === 0 || s === 3 || s === 10) kick(t);
+    if (s === 4 || s === 12) snare(t);
+    if (s === 7 || s === 9) ghostSnare(t);
+    hat(t, s === 14);
+  }
+}
+function playBass(style, root, s, t, st) {
+  if (style === 'octave') { if (s % 2 === 0) bass(root + (s % 4 === 2 ? 12 : 0), t, st * 1.7); }
+  else if (style === 'long') { if (s === 0) bass(root, t, st * 7); else if (s === 8) bass(root + 7, t, st * 7); }
+  else if (style === 'gallop') { const b = s % 4; if (b !== 1) bass(root + (b === 3 ? 12 : 0), t, st * 0.9); }
+  else if (style === 'funk') { if ([0, 3, 6, 8, 10, 11, 14].includes(s)) bass(root + (s === 6 || s === 11 ? 12 : 0), t, st * (s === 0 ? 1.8 : 0.8)); }
+}
+function playPad(style, tones, s, t, st) {
+  if (style === 'sustain') { if (s === 0) pad(tones, t, st * 15); }
+  else if (style === 'stab') { if (s === 0 || s === 6 || s === 12) stab(tones, t, st * 1.2); }
+  else if (style === 'offbeat') { if (s % 4 === 2) stab(tones, t, st * 0.8); if (s === 0) pad(tones, t, st * 15); }
+}
+function playStep(song, n, t, ow) {
+  const bar = Math.floor(n / 16), s = n % 16, sec = sectionOf(song, bar), st = 60 / song.bpm / 4, ch = song.chords[bar % 4];
   if (sec === 'intro') {
     if (s % 4 === 0) {
       kick(t);
@@ -283,28 +404,29 @@ function playStep(n, t) {
     return;
   }
   if (sec === 'outro') {
-    if (bar === INTRO_BARS + MAIN_BARS && s === 0) { kick(t); crash(t); pad(CHORDS[0].tones, t, st * 28); bass(33, t, st * 14); }
+    if (bar === INTRO_BARS + mainBars(song) && s === 0) { kick(t); crash(t); pad(song.chords[0].tones, t, st * 28); bass(song.chords[0].root - 12, t, st * 14); }
     return;
   }
-  if (s % 4 === 0) kick(t);
-  if (s === 4 || s === 12) snare(t);
-  if (s % 4 === 2) hat(t, true);
-  else if (sec === 'B' || s % 2 === 0) hat(t, false);
-  if (s === 0) { pad(ch.tones, t, st * 15); if ((bar - INTRO_BARS) % 8 === 0) crash(t); }
-  if (s % 2 === 0) bass(ch.root + (s % 4 === 2 ? 12 : 0), t, st * 1.7);
-  const ow = owner();
-  for (const [ms, semi, len] of melodyBar(bar)) if (ms === s) lead(ow, 69 + semi, t, len * st * 0.95);
+  playDrums(song.drums, s, t, sec);
+  if (s === 0 && (bar - INTRO_BARS) % 8 === 0) crash(t);
+  playPad(song.pad, ch.tones, s, t, st);
+  playBass(song.bass, ch.root, s, t, st);
+  for (const [ms, semi, len] of melodyBar(song, bar)) if (ms === s) lead(ow, song.mel + semi, t, len * st * 0.95);
+}
+function startPreview(song) {
+  ensureAudio(); unmute();
+  PV = { song, startAt: ac.currentTime + 0.08, k: 0 };
 }
 
 // ================================================================ GAME
-function buildChart(diff, beat) {
+function buildChart(song, diff, beat) {
   const st = beat / 4, notes = [];
   let prevLane = -1, prevT = -9;
-  for (let bar = INTRO_BARS; bar < INTRO_BARS + MAIN_BARS; bar++) {
-    for (const [s, semi] of melodyBar(bar)) {
+  for (let bar = INTRO_BARS; bar < INTRO_BARS + mainBars(song); bar++) {
+    for (const [s, semi] of melodyBar(song, bar)) {
       if (diff === 0 && s % 4 !== 0) continue;
       if (diff === 1 && s % 2 !== 0) continue;
-      const t = (bar * 16 + s) * st;
+      const t = stepTime(bar * 16 + s, st, song.swing);
       let lane = Math.min(3, Math.floor((((semi % 12) + 12) % 12) / 3));
       if (lane === prevLane && t - prevT < st * 1.5) lane = (lane + 1) % 4;
       notes.push({ t, lane, jam: false, judged: false });
@@ -314,9 +436,9 @@ function buildChart(diff, beat) {
   return notes;
 }
 const pickTh = () => [25, 25, 50, 50, 50, 75, 100][(Math.random() * 7) | 0];
-function makePlayer(id, diff, cpu, beat) {
+function makePlayer(id, diff, cpu, song, beat) {
   return {
-    id, diff, cpu, notes: buildChart(diff, beat), scale: 1, volt: 0, combo: 0, maxCombo: 0,
+    id, diff, cpu, notes: buildChart(song, diff, beat), scale: 1, volt: 0, combo: 0, maxCombo: 0,
     stats: { P: 0, G: 0, D: 0, M: 0, sends: 0, reflects: 0, maxLv: 0 },
     fx: { noise: -9, wobble: -9, ghost: -9 }, ghosts: [], lastGhost: -9,
     keyFlash: [-9, -9, -9, -9], popJ: null, popE: null, cpuTh: pickTh(),
@@ -326,22 +448,24 @@ const other = pl => (pl.id === 1 ? M.pl[1] : M.pl[0]);
 const panOf = pl => (pl.id === 1 ? -0.45 : 0.45);
 
 function startMatch() {
-  ensureAudio();
+  ensureAudio(); unmute();
+  PV = null;
   const t0 = ac.currentTime;
-  master.gain.cancelScheduledValues(t0); master.gain.setValueAtTime(0.8, t0);
-  const beat = 60 / P.bpm;
-  const p1 = makePlayer(1, cfg.d1, false, beat);
-  const p2 = makePlayer(2, cfg.d2, cfg.mode === 'cpu', beat);
-  const hardN = buildChart(2, beat).length;
+  const song = SONGS[selIdx];
+  // BPM は曲ごと。パネルの【BPM】は NEON HIGHWAY 128 を基準にした倍率として効く
+  const beat = 60 / (song.bpm * P.bpm / DEFAULTS.bpm);
+  const p1 = makePlayer(1, cfg.d1, false, song, beat);
+  const p2 = makePlayer(2, cfg.d2, cfg.mode === 'cpu', song, beat);
+  const hardN = buildChart(song, 2, beat).length;
   p1.scale = hardN / p1.notes.length; p2.scale = hardN / p2.notes.length;
   M = {
-    beat, pl: [p1, p2], dom: 0, packets: [], particles: [], shake: 0, shakeT: -9, flashT: -9,
+    song, beat, pl: [p1, p2], dom: 0, packets: [], particles: [], shake: 0, shakeT: -9, flashT: -9,
     startAt: t0 + 0.15, nextStep: 0, musicStopped: false,
-    songEnd: TOTAL_BARS * 4 * beat, notesEnd: (INTRO_BARS + MAIN_BARS) * 4 * beat,
+    songEnd: totalBars(song) * 4 * beat, notesEnd: (INTRO_BARS + mainBars(song)) * 4 * beat,
     result: null,
   };
   state = 'play';
-  startScheduler();
+  tick();
   showHint(`ノーツが光る線に重なったら叩く　P1: ${laneKeysText(1)}${cfg.mode === '2p' ? `　P2: ${laneKeysText(2)}` : ''}`, 'start');
 }
 function songNow() {
@@ -513,7 +637,7 @@ function endMatch(reason, now) {
   const winner = M.dom > 1 ? 1 : M.dom < -1 ? 2 : 0;
   M.result = { reason, winner, at: performance.now() / 1000 };
   if (reason === 'ko') {
-    M.musicStopped = true; clearInterval(schedTimer);
+    M.musicStopped = true;
     const t = ac.currentTime; master.gain.setValueAtTime(0.8, t); master.gain.linearRampToValueAtTime(0.0001, t + 0.5);
     setTimeout(() => { if (state === 'result') { const t2 = ac.currentTime; master.gain.cancelScheduledValues(t2); master.gain.setValueAtTime(0.8, t2); sfxEnd(winner !== 0); } }, 650);
   } else sfxEnd(winner !== 0);
@@ -552,8 +676,18 @@ addEventListener('keydown', e => {
   if (used) e.preventDefault();
   if (e.repeat) return;
   const code = e.code;
+  if (state === 'select') {
+    if (code === 'ArrowUp' || code === 'ArrowDown') {
+      selIdx = (selIdx + (code === 'ArrowUp' ? -1 : 1) + SONGS.length) % SONGS.length;
+      LS.set('sj.song', selIdx); startPreview(SONGS[selIdx]);
+    } else if (code === 'Enter' || code === 'Space') startMatch();
+    else if (code === 'Escape') toTitle();
+    else if (code === 'KeyZ') { cfg.d1 = (cfg.d1 + 1) % 3; saveCfg(); }
+    else if (code === 'Slash') { cfg.d2 = (cfg.d2 + 1) % 3; saveCfg(); }
+    return;
+  }
   if (state === 'title') {
-    if (code === 'Enter' || code === 'Space') startMatch();
+    if (code === 'Enter' || code === 'Space') goSelect();
     else if (code === 'KeyM') { cfg.mode = cfg.mode === 'cpu' ? '2p' : 'cpu'; saveCfg(); }
     else if (code === 'KeyZ') { cfg.d1 = (cfg.d1 + 1) % 3; saveCfg(); }
     else if (code === 'Slash') { cfg.d2 = (cfg.d2 + 1) % 3; saveCfg(); }
@@ -583,28 +717,43 @@ addEventListener('keydown', e => {
   }
   if (state === 'pause') {
     if (code === 'Escape' || code === 'Enter' || code === 'Space') resume();
-    else if (code === 'KeyQ') { toTitle(); }
+    else if (code === 'KeyQ') { ac.resume(); goSelect(); }
     return;
   }
   if (state === 'result') {
     if (performance.now() / 1000 - M.result.at < 0.6) return;
     if (code === 'Enter' || code === 'Space') startMatch();
-    else if (code === 'Escape') toTitle();
+    else if (code === 'Escape') goSelect();
   }
 });
 function pause() { if (state !== 'play') return; state = 'pause'; ac.suspend(); }
 function resume() { if (state !== 'pause') return; state = 'play'; ac.resume(); }
-function toTitle() {
-  if (M) { M.musicStopped = true; clearInterval(schedTimer); }
+function stopMatchAudio() {
+  if (M) M.musicStopped = true;
   if (ac) { ac.resume(); const t = ac.currentTime; master.gain.cancelScheduledValues(t); master.gain.setValueAtTime(0.0001, t); }
-  state = 'title';
+}
+function goSelect() {
+  stopMatchAudio();
+  M = null; state = 'select';
+  startPreview(SONGS[selIdx]);
+}
+function toTitle() {
+  stopMatchAudio();
+  PV = null; M = null; state = 'title';
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 
 const cv = document.getElementById('cv');
 cv.addEventListener('pointerdown', e => {
   const x = e.clientX, y = e.clientY;
-  if (state === 'title') { startMatch(); return; }
+  if (state === 'title') { goSelect(); return; }
+  if (state === 'select') {
+    const r = selRows.find(r => y >= r.y && y <= r.y + r.h && x >= r.x && x <= r.x + r.w);
+    if (!r) return;
+    if (r.i === selIdx) startMatch();
+    else { selIdx = r.i; LS.set('sj.song', selIdx); startPreview(SONGS[selIdx]); }
+    return;
+  }
   if (state === 'pause') { resume(); return; }
   if (state === 'result') { if (performance.now() / 1000 - M.result.at > 0.6) startMatch(); return; }
   if (state !== 'play') return;
@@ -668,10 +817,10 @@ function rrect(x, y, w, h, r) {
   g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
 
-function drawBackdrop(t) {
-  const { W, H, cx } = L, hz = H * 0.54;
+function drawBackdrop(t, song, beat) {
+  const { W, H, cx } = L, hz = H * 0.54, pal = song.pal;
   let gr = g.createLinearGradient(0, 0, 0, hz);
-  gr.addColorStop(0, '#0a0620'); gr.addColorStop(0.7, '#251048'); gr.addColorStop(1, '#4a1450');
+  gr.addColorStop(0, pal.sky[0]); gr.addColorStop(0.7, pal.sky[1]); gr.addColorStop(1, pal.sky[2]);
   g.fillStyle = gr; g.fillRect(0, 0, W, hz);
   // stars
   g.fillStyle = 'rgba(239,232,255,0.5)';
@@ -682,26 +831,26 @@ function drawBackdrop(t) {
   // sun
   const r = Math.min(L.cw * 0.62, H * 0.17), sy = hz - r * 0.35;
   gr = g.createLinearGradient(0, sy - r, 0, sy + r);
-  gr.addColorStop(0, C.sunA); gr.addColorStop(1, C.sunB);
-  g.save(); g.shadowColor = C.sunB; g.shadowBlur = 40;
+  gr.addColorStop(0, pal.sunA); gr.addColorStop(1, pal.sunB);
+  g.save(); g.shadowColor = pal.sunB; g.shadowBlur = 40;
   g.beginPath(); g.arc(cx, sy, r, 0, Math.PI * 2); g.fillStyle = gr; g.fill(); g.restore();
-  g.fillStyle = '#2a0f4a';
+  g.fillStyle = pal.stripe;
   for (let i = 0; i < 7; i++) {
     const yy = sy + r * 0.05 + i * r * 0.15 + ((t * 12) % (r * 0.15)), hh = 1.5 + i * 1.6;
     if (yy < sy + r) g.fillRect(cx - r, yy, r * 2, hh);
   }
   // floor
   g.fillStyle = '#07041a'; g.fillRect(0, hz, W, H - hz);
-  g.strokeStyle = 'rgba(122,60,255,0.55)'; g.lineWidth = 1;
+  g.strokeStyle = `rgba(${pal.grid},0.55)`; g.lineWidth = 1;
   g.beginPath();
   for (let i = -16; i <= 16; i++) { g.moveTo(cx + i * 8, hz); g.lineTo(cx + i * W * 0.12, H); }
-  const ph = (t / (M ? M.beat : 60 / P.bpm)) % 1;
+  const ph = (t / beat) % 1;
   for (let i = 0; i < 12; i++) {
     const k = (i + ph) / 12, yy = hz + (H - hz) * k * k;
     g.moveTo(0, yy); g.lineTo(W, yy);
   }
   g.stroke();
-  g.strokeStyle = C.sunB; g.globalAlpha = 0.8; g.beginPath(); g.moveTo(0, hz); g.lineTo(W, hz); g.stroke(); g.globalAlpha = 1;
+  g.strokeStyle = pal.sunB; g.globalAlpha = 0.8; g.beginPath(); g.moveTo(0, hz); g.lineTo(W, hz); g.stroke(); g.globalAlpha = 1;
 }
 
 function noteY(pl, t, now) {
@@ -846,8 +995,9 @@ function drawCenter(now) {
     const p = pos(k);
     g.save(); g.shadowColor = col; g.shadowBlur = 20; g.fillStyle = '#fff'; g.beginPath(); g.arc(p.x, p.y, rad * 0.55, 0, Math.PI * 2); g.fill(); g.restore();
   }
-  // logo foot
-  txt('SIGNAL JACK', cx, yJ + 26, Math.min(15, cw * 0.11), C.dim, { font: F.logo, alpha: 0.8 });
+  // now playing
+  txt('NOW ON AIR', cx, yJ + 14, 10, C.dim, { font: F.num });
+  txt(M.song.title, cx, yJ + 32, Math.min(14, cw * 0.085), M.song.pal.sunA, { font: F.num, glow: 6 });
 }
 function drawParticles(now) {
   for (const p of M.particles) {
@@ -885,7 +1035,7 @@ function drawGame(now, wall) {
     const k = M.shake * (1 - sa / 0.3);
     g.translate((Math.random() - 0.5) * k * 2, (Math.random() - 0.5) * k);
   }
-  drawBackdrop(state === 'pause' ? now : Math.max(now, 0) + 10);
+  drawBackdrop(Math.max(now, 0) + 10, M.song, M.beat);
   for (const pl of M.pl) drawField(pl, now);
   drawCenter(now);
   drawParticles(now);
@@ -901,7 +1051,7 @@ function drawGame(now, wall) {
   if (state === 'pause') {
     g.fillStyle = 'rgba(5,3,15,0.75)'; g.fillRect(0, 0, W, H);
     txt('一時停止', L.cx, H * 0.42, 34, C.ink, { glow: 12, glowColor: C.p1 });
-    txt('Esc / Enter：再開　　Q：タイトルへ', L.cx, H * 0.42 + 46, 15, C.dim);
+    txt('Esc / Enter：再開　　Q：選曲へ', L.cx, H * 0.42 + 46, 15, C.dim);
   }
   if (state === 'result') drawResult(wall);
 }
@@ -932,11 +1082,57 @@ function drawResult(wall) {
       txt(String(v), x + fd.w * 0.32, yy, 15, C.ink, { font: F.num, align: 'right' });
     });
   }
-  if (age > 0.6) txt('Enter / タップ：もう一度　　Esc：タイトル', cx, H * 0.86, 15, C.ink, { alpha: 0.6 + 0.4 * Math.sin(wall * 4) });
+  if (age > 0.6) txt('Enter / タップ：同じ曲でもう一度　　Esc：選曲へ', cx, H * 0.86, 15, C.ink, { alpha: 0.6 + 0.4 * Math.sin(wall * 4) });
+}
+const LEVELS = SONGS.map(songLevels);
+function drawSelect(wall) {
+  const { W, H, cx } = L, song = SONGS[selIdx], pal = song.pal;
+  const beat = 60 / song.bpm;
+  drawBackdrop(PV && ac ? ac.currentTime - PV.startAt + 10 : wall, song, beat);
+  g.fillStyle = 'rgba(5,3,15,0.4)'; g.fillRect(0, 0, W, H);
+  const bw = Math.min(640, W - 32), bx = cx - bw / 2;
+  txt('選曲', cx, Math.max(36, H * 0.07), 26, C.ink, { glow: 12, glowColor: pal.sunB });
+  const rh = Math.max(50, Math.min(64, H * 0.085)), top = Math.max(64, H * 0.13);
+  const fsT = Math.max(15, Math.min(22, bw / 26)), fsS = Math.max(11, Math.min(13, bw / 48));
+  // 拍に合わせて選択中の行を脈打たせる
+  const pulse = PV && ac ? 1 - (((ac.currentTime - PV.startAt) / beat) % 1 + 1) % 1 : 0;
+  selRows = [];
+  SONGS.forEach((s, i) => {
+    const y = top + i * (rh + 8), cur = i === selIdx;
+    selRows.push({ i, x: bx, y, w: bw, h: rh });
+    g.fillStyle = cur ? 'rgba(8,5,25,0.92)' : 'rgba(8,5,25,0.7)'; g.fillRect(bx, y, bw, rh);
+    g.save();
+    if (cur) { g.shadowColor = s.pal.sunB; g.shadowBlur = 10 + 10 * pulse; }
+    g.strokeStyle = cur ? s.pal.sunA : 'rgba(140,127,184,0.35)'; g.lineWidth = cur ? 2 : 1;
+    g.strokeRect(bx + 0.5, y + 0.5, bw - 1, rh - 1); g.restore();
+    // 太陽の色見本
+    const sg = g.createLinearGradient(0, y + 10, 0, y + rh - 10);
+    sg.addColorStop(0, s.pal.sunA); sg.addColorStop(1, s.pal.sunB);
+    g.fillStyle = sg; g.beginPath(); g.arc(bx + 26, y + rh / 2, Math.min(14, rh * 0.26), 0, Math.PI * 2); g.fill();
+    txt(s.title, bx + 52, y + rh * 0.36, fsT, cur ? C.ink : C.dim, { font: F.num, align: 'left', glow: cur ? 8 : 0, glowColor: s.pal.sunB });
+    g.save(); g.beginPath(); g.rect(bx + 52, y, Math.max(0, bw - 52 - 118), rh); g.clip();
+    txt(s.mood, bx + 52, y + rh * 0.72, fsS, cur ? C.ink : C.dim, { align: 'left', alpha: cur ? 0.85 : 0.6 });
+    g.restore();
+    txt(`${s.bpm} BPM`, bx + bw - 14, y + rh * 0.36, fsS + 1, cur ? s.pal.sunA : C.dim, { font: F.num, align: 'right' });
+    const lv = LEVELS[i];
+    txt(`E${lv[0]}  N${lv[1]}  H${lv[2]}`, bx + bw - 14, y + rh * 0.72, fsS, C.dim, { font: F.num, align: 'right' });
+  });
+  // 詳細
+  const dy = top + SONGS.length * (rh + 8) + 6, dh = rh * 1.5;
+  g.fillStyle = 'rgba(8,5,25,0.88)'; g.fillRect(bx, dy, bw, dh);
+  g.strokeStyle = pal.sunB; g.strokeRect(bx + 0.5, dy + 0.5, bw - 1, dh - 1);
+  const secs = Math.round(totalBars(song) * 4 * beat);
+  const n1 = buildChart(song, cfg.d1, beat).length;
+  txt(`特徴：${song.feature}`, bx + 16, dy + dh * 0.3, fsS + 1, C.ink, { align: 'left' });
+  txt(`長さ ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}　　P1 ${DIFFS[cfg.d1]} のノーツ数 ${n1}　　試聴中`, bx + 16, dy + dh * 0.7, fsS, C.dim, { align: 'left' });
+  // 操作
+  const fy = dy + dh + 26;
+  txt(`↑↓ 選ぶ　Enter 決定　Esc 戻る`, cx, fy, fsS + 1, C.sunA, { alpha: 0.7 + 0.3 * Math.sin(wall * 4) });
+  txt(`Z：P1 ${DIFFS[cfg.d1]}　　/：${cfg.mode === 'cpu' ? 'CPU' : 'P2'} ${DIFFS[cfg.d2]}　　（E/N/H は難しさ別の目安レベル）`, cx, fy + 24, fsS, C.dim);
 }
 function drawTitle(wall) {
   const { W, H, cx } = L;
-  drawBackdrop(wall);
+  drawBackdrop(wall, SONGS[selIdx], 60 / SONGS[selIdx].bpm);
   g.fillStyle = 'rgba(5,3,15,0.35)'; g.fillRect(0, 0, W, H);
   const ls = Math.min(78, W * 0.11);
   txt('SIGNAL JACK', cx, H * 0.2, ls, C.p1, { font: F.logo, glow: 28, glowColor: C.p2 });
@@ -970,7 +1166,7 @@ function drawTitle(wall) {
     txt(v, bx + bw * 0.3, yy, fs, C.ink, { align: 'left' });
     txt(key, bx + bw - 16, yy, fs, C.p1, { font: F.num, align: 'right' });
   });
-  txt('Enter / クリックでスタート', cx, by + lh * 7.6, fs + 4, C.sunA, { glow: 12, alpha: 0.7 + 0.3 * Math.sin(wall * 4) });
+  txt('Enter / クリックで選曲へ', cx, by + lh * 7.6, fs + 4, C.sunA, { glow: 12, alpha: 0.7 + 0.3 * Math.sin(wall * 4) });
   const rules = ['PERFECT で電圧がたまる → 送信キーで相手に干渉を送る（ためるほど強い・ミスで全部消える）',
     '相手の干渉ノーツを PERFECT で叩くと跳ね返る ── 優勢な側の楽器が曲の主旋律を取る'];
   rules.forEach((s, i) => txt(s, cx, by + lh * 8.6 + 22 + i * 20, Math.max(10, Math.min(13, W / 62)), C.dim));
@@ -985,7 +1181,8 @@ function frame() {
     const now = songNow();
     if (state === 'play') update(now);
     drawGame(now, wall);
-  } else drawTitle(wall);
+  } else if (state === 'select') drawSelect(wall);
+  else drawTitle(wall);
   requestAnimationFrame(frame);
 }
 resize();
